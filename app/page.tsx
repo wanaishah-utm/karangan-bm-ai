@@ -6,11 +6,18 @@
 //   selectedIds – which fact cards the teacher has ticked
 //   loading     – whether a full generation is in progress
 //
-// Generation is now REAL: it calls /api/research once per 5W1H section, all six
-// in parallel, and drops each section's cards into `result` as they arrive so
-// the page fills in progressively.
+// Generation loads ONE aspect at a time: a search fetches "siapa" first and
+// shows only that. The other five aspects load on demand when the user picks
+// them in the sidebar, and are cached once loaded. Selections (selectedIds) are
+// global, so "Jana laporan" collects ticked cards across every visited aspect.
 import { useRef, useState } from "react";
-import { FileOutput, ArrowLeft, TriangleAlert } from "lucide-react";
+import {
+  FileOutput,
+  ArrowLeft,
+  ArrowRight,
+  TriangleAlert,
+  Loader2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import type { ResearchResult, SavedReport, SectionKey } from "@/types";
@@ -23,8 +30,9 @@ import { MobileSidebar } from "@/components/layout/mobile-sidebar";
 import { SearchBar } from "@/components/search/search-bar";
 import { QuickTopics } from "@/components/search/quick-topics";
 import { Section } from "@/components/research/section";
-import { ProgressSteps, RESEARCH_STEPS } from "@/components/research/progress-steps";
 import { ReportView } from "@/components/report/report-view";
+import { RotatingText } from "@/components/ui/rotating-text";
+import { ClickEffects } from "@/components/ui/click-effects";
 import { Button } from "@/components/ui/button";
 
 // The six sections always appear in this fixed order.
@@ -39,6 +47,14 @@ const SECTION_ORDER: SectionKey[] = [
 
 // How many cards to fetch per section (both first load and "Muat lagi").
 const CARDS_PER_SECTION = 8;
+
+// Shared hover/focus treatment for the bottom navigation buttons: they turn
+// emerald with readable text, gain a soft shadow, and lift slightly. The lift is
+// gated behind `motion-safe` so it's skipped when the user prefers reduced motion.
+// The `dark:hover`/`dark:focus-visible` overrides beat the outline variant's own
+// dark hover background, so the emerald wins in dark mode too.
+const NAV_BUTTON =
+  "transition-all duration-200 ease-out hover:bg-primary hover:text-primary-foreground dark:hover:bg-primary hover:shadow-lg focus-visible:bg-primary focus-visible:text-primary-foreground dark:focus-visible:bg-primary focus-visible:shadow-lg motion-safe:hover:-translate-y-0.5 motion-safe:focus-visible:-translate-y-0.5";
 
 // Small helpers to build "one value per section" objects.
 function emptySections(): ResearchResult["sections"] {
@@ -67,6 +83,10 @@ export default function Home() {
   // it reliably blocks a fast double-click on "Jana" from firing two runs.
   const researchInFlight = useRef(false);
 
+  // Points at the top of the results block so the prev/next buttons can scroll
+  // back up after switching aspect.
+  const resultsRef = useRef<HTMLDivElement>(null);
+
   // Saved reports + search history, backed by localStorage (see the hooks).
   const { reports, save, rename, duplicate, remove, refresh: refreshReports } =
     useReports();
@@ -82,8 +102,11 @@ export default function Home() {
   // Look the active report up from state so rename/duplicate reflect instantly.
   const activeReport = reports.find((r) => r.id === activeReportId) ?? null;
 
-  // How many sections have finished (used to drive the progress steps).
-  const [completedCount, setCompletedCount] = useState(0);
+  // Which single aspect the main area is currently showing.
+  const [activeAspect, setActiveAspect] = useState<SectionKey>("siapa");
+  // Which aspects have already been fetched (so re-selecting is instant and we
+  // know whether an aspect still needs loading).
+  const [loadedAspects, setLoadedAspects] = useState<Set<SectionKey>>(new Set());
   // Per-section flags: first-load skeletons, and "Muat lagi" spinners.
   const [sectionLoading, setSectionLoading] = useState<Record<SectionKey, boolean>>(
     allSectionsFlag(false),
@@ -92,11 +115,29 @@ export default function Home() {
     allSectionsFlag(false),
   );
 
-  // ProgressSteps expects a step index; map finished-section count onto it.
-  const currentStep = Math.min(completedCount, RESEARCH_STEPS.length - 1);
+  // Fetch one aspect's cards, store them, and mark it loaded. Returns whether it
+  // succeeded. Shows the section's skeleton via `sectionLoading` while it runs.
+  async function fetchAspect(key: SectionKey, topicArg: string): Promise<boolean> {
+    setSectionLoading((prev) => ({ ...prev, [key]: true }));
+    try {
+      const cards = await fetchSection(topicArg, key, CARDS_PER_SECTION, []);
+      setResult((prev) =>
+        prev ? { ...prev, sections: { ...prev.sections, [key]: cards } } : prev,
+      );
+      setLoadedAspects((prev) => new Set(prev).add(key));
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Ralat tidak diketahui.";
+      toast.error(`Bahagian "${SECTION_LABELS[key]}" gagal: ${message}`);
+      return false;
+    } finally {
+      setSectionLoading((prev) => ({ ...prev, [key]: false }));
+    }
+  }
 
-  // REAL generate: fetch all six sections in parallel and fill them in as they
-  // resolve. `overrideTopic` lets a quick-topic pill generate immediately.
+  // Start a fresh search: load ONLY "siapa" and show it. `overrideTopic` lets a
+  // quick-topic pill generate immediately.
   async function handleGenerate(overrideTopic?: string) {
     // Safety guard: only treat overrideTopic as the topic when it's really a
     // string. This stops a stray click event (MouseEvent) from being used here.
@@ -115,46 +156,21 @@ export default function Home() {
     setTopic(activeTopic);
     setLoading(true);
     setSelectedIds(new Set());
-    setCompletedCount(0);
+    setActiveAspect("siapa"); // always start on the first aspect
+    setLoadedAspects(new Set());
     setLoadingMore(allSectionsFlag(false));
-    setSectionLoading(allSectionsFlag(true)); // every section starts loading
-    // Start with an empty result so sections render (as skeletons) right away.
+    setSectionLoading(allSectionsFlag(false));
+    // Start with an empty result so the section can render its skeleton.
     setResult({
       topic: activeTopic,
       generatedAt: new Date().toISOString(),
       sections: emptySections(),
     });
 
-    // Count how many sections fail so we can detect a total failure.
-    let failureCount = 0;
-
     try {
-      // Fire all six requests together; allSettled so one failure won't stop the rest.
-      await Promise.allSettled(
-        SECTION_ORDER.map(async (key) => {
-          try {
-            const cards = await fetchSection(activeTopic, key, CARDS_PER_SECTION, []);
-            // Add this section's cards to the result as soon as they arrive.
-            setResult((prev) =>
-              prev
-                ? { ...prev, sections: { ...prev.sections, [key]: cards } }
-                : prev,
-            );
-          } catch (error) {
-            failureCount += 1;
-            const message =
-              error instanceof Error ? error.message : "Ralat tidak diketahui.";
-            toast.error(`Bahagian "${SECTION_LABELS[key]}" gagal: ${message}`);
-          } finally {
-            // Mark this section done whether it succeeded or failed.
-            setSectionLoading((prev) => ({ ...prev, [key]: false }));
-            setCompletedCount((c) => c + 1);
-          }
-        }),
-      );
-
-      // If ALL sections failed, show a full error state with a retry button.
-      if (failureCount === SECTION_ORDER.length) {
+      // Only the first aspect loads now; the rest load on demand from the sidebar.
+      const ok = await fetchAspect("siapa", activeTopic);
+      if (!ok) {
         setResearchFailed(true);
         setResult(null);
       }
@@ -162,6 +178,26 @@ export default function Home() {
       setLoading(false);
       researchInFlight.current = false; // allow the next run
     }
+  }
+
+  // Show a given aspect. If it hasn't been loaded yet, fetch it (which shows the
+  // skeleton); if it's already cached, switching is instant.
+  function selectAspect(key: SectionKey) {
+    setActiveAspect(key);
+    if (!result) return; // no search yet — nothing to load
+    if (loadedAspects.has(key)) return; // cached → instant
+    if (sectionLoading[key]) return; // already loading
+    fetchAspect(key, result.topic);
+  }
+
+  // Move to the aspect at a given offset (-1 = previous, +1 = next) in 5W1H
+  // order, load it if needed, and scroll back to the top of the results.
+  function goToAspectBy(offset: number) {
+    const index = SECTION_ORDER.indexOf(activeAspect);
+    const target = SECTION_ORDER[index + offset];
+    if (!target) return; // no aspect in that direction
+    selectAspect(target);
+    resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   // "Muat lagi": fetch 8 MORE cards for one section, telling the AI what we
@@ -277,13 +313,16 @@ export default function Home() {
 
   // A short Bahasa Melayu status line announced to screen readers (see the
   // aria-live region in the layout below).
+  const activeLabel = SECTION_LABELS[activeAspect];
   const srStatus = loading
-    ? `Sedang menyelidik "${topic}". ${completedCount} daripada ${SECTION_ORDER.length} bahagian selesai.`
+    ? `Sedang menyelidik "${topic}".`
     : researchFailed
       ? "Penyelidikan gagal. Sila cuba lagi."
-      : result
-        ? "Penyelidikan selesai."
-        : "";
+      : sectionLoading[activeAspect]
+        ? `Sedang memuatkan bahagian ${activeLabel}.`
+        : result
+          ? `Menunjukkan bahagian ${activeLabel}.`
+          : "";
 
   return (
     // Row on desktop (sidebar + main); on mobile the sidebar collapses into a
@@ -292,6 +331,8 @@ export default function Home() {
       <Sidebar
         reports={reports}
         history={history}
+        activeAspect={activeAspect}
+        onSelectAspect={selectAspect}
         onOpenReport={handleOpenReport}
         onPickHistory={handlePickHistory}
         onDataChanged={handleDataChanged}
@@ -303,13 +344,13 @@ export default function Home() {
           <MobileSidebar
             reports={reports}
             history={history}
+            activeAspect={activeAspect}
+            onSelectAspect={selectAspect}
             onOpenReport={handleOpenReport}
             onPickHistory={handlePickHistory}
             onDataChanged={handleDataChanged}
           />
-          <span className="font-heading text-sm font-semibold">
-            Karangan BM AI Assistant
-          </span>
+          <span className="font-heading text-sm font-semibold">BM AI Assistant</span>
         </div>
 
         {/* Screen-reader-only live region announcing research progress in BM. */}
@@ -338,44 +379,63 @@ export default function Home() {
         ) : (
           // ---------- SEARCH VIEW ----------
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-6">
-          {/* Search chrome (heading, search box, quick topics) — hidden in print */}
-          <div className="no-print flex flex-col gap-8">
-            {/* Heading + tagline */}
-            <div className="flex flex-col items-center gap-2 text-center">
-              <h2 className="font-heading text-2xl font-semibold sm:text-3xl">
-                Karangan BM AI Assistant
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                Jana bahan karangan mengikut 5W1H daripada sumber rasmi.
-              </p>
+          {/* Search chrome (heading, search box, quick topics) — hidden in print.
+              `relative` so the click-effects layer can sit absolutely behind it. */}
+          <div className="no-print relative flex flex-col gap-8">
+            {/* Decorative click-effects layer — BEHIND the hero content (z-0) and
+                scoped to this box only, so it never fires on the sidebar, results,
+                fact cards, or report view. */}
+            <ClickEffects
+              className="no-print absolute inset-0 z-0"
+              mode="rings"
+              duration={0.3}
+              strokeWidth={1.5}
+              effectSize={60}
+              showLabel={false}
+            />
+
+            {/* Hero content sits ABOVE the layer (z-10). It's pointer-events-none
+                so clicks on empty space fall through to the effects layer, while
+                the real controls re-enable pointer events so they stay clickable. */}
+            <div className="pointer-events-none relative z-10 flex flex-col gap-8">
+              {/* Heading + animated rotating headline.
+                  The heading stays the real, accessible page heading; the rotating
+                  text below it is decorative and cycles Jana Karangan/Idea/… */}
+              <div className="flex flex-col items-center gap-3 text-center">
+                <h2 className="font-heading text-2xl font-semibold sm:text-3xl">
+                  BM AI Assistant
+                </h2>
+                <RotatingText
+                  className="no-print"
+                  prefix="Jana"
+                  texts={["Karangan", "Idea", "Fakta", "Statistik", "Bahan"]}
+                />
+              </div>
+
+              {/* Search box (wired to topic + loading) */}
+              <div className="pointer-events-auto">
+                <SearchBar
+                  value={topic}
+                  onChange={setTopic}
+                  // Wrap so no click event is passed in as `overrideTopic`.
+                  onGenerate={() => handleGenerate()}
+                  loading={loading}
+                />
+              </div>
+
+              {/* Quick topics: fill the box AND generate straight away */}
+              <div className="pointer-events-auto">
+                <QuickTopics
+                  onPick={(picked) => {
+                    setTopic(picked);
+                    handleGenerate(picked);
+                  }}
+                />
+              </div>
             </div>
-
-            {/* Search box (wired to topic + loading) */}
-            <SearchBar
-              value={topic}
-              onChange={setTopic}
-              // Wrap so no click event is passed in as `overrideTopic`.
-              onGenerate={() => handleGenerate()}
-              loading={loading}
-            />
-
-            {/* Quick topics: fill the box AND generate straight away */}
-            <QuickTopics
-              onPick={(picked) => {
-                setTopic(picked);
-                handleGenerate(picked);
-              }}
-            />
           </div>
 
-          {/* While generating: show the progress steps (driven by sections done) */}
-          {loading && (
-            <div className="mx-auto">
-              <ProgressSteps currentStep={currentStep} />
-            </div>
-          )}
-
-          {/* If EVERY section failed, show a clear error state with a retry. */}
+          {/* If the initial search failed, show a clear error state with a retry. */}
           {researchFailed && (
             <div
               role="alert"
@@ -384,16 +444,16 @@ export default function Home() {
               <TriangleAlert className="size-8 text-destructive" aria-hidden />
               <p className="font-medium">Penyelidikan gagal.</p>
               <p className="text-sm text-muted-foreground">
-                Semua bahagian gagal dimuatkan. Sila semak sambungan internet
-                anda dan cuba lagi.
+                Sila semak sambungan internet anda dan cuba lagi.
               </p>
               <Button onClick={() => handleGenerate()}>Cuba lagi</Button>
             </div>
           )}
 
-          {/* Show the report as soon as we have a result object (fills in live) */}
+          {/* Show ONLY the active aspect. Other aspects load when picked from the
+              sidebar (see selectAspect). Selections persist across aspects. */}
           {result && (
-            <div className="flex flex-col gap-6">
+            <div ref={resultsRef} className="flex scroll-mt-4 flex-col gap-6">
               <div className="no-print flex items-center justify-between gap-2">
                 <h3 className="font-heading text-lg font-semibold">
                   Laporan: {result.topic}
@@ -404,18 +464,85 @@ export default function Home() {
                 </Button>
               </div>
 
-              {SECTION_ORDER.map((key) => (
-                <Section
-                  key={key}
-                  sectionKey={key}
-                  cards={result.sections[key]}
-                  selectedIds={selectedIds}
-                  onToggle={toggleId}
-                  onLoadMore={handleLoadMore}
-                  loading={sectionLoading[key]}
-                  loadingMore={loadingMore[key]}
-                />
-              ))}
+              {/* key=activeAspect remounts the section (fresh skeleton) on switch */}
+              <Section
+                key={activeAspect}
+                sectionKey={activeAspect}
+                cards={result.sections[activeAspect]}
+                selectedIds={selectedIds}
+                onToggle={toggleId}
+                loading={sectionLoading[activeAspect]}
+              />
+
+              {/* Bottom navigation row — changes with the active aspect:
+                    first  : [Muat lagi] [Seterusnya]
+                    middle : [Sebelumnya] [Muat lagi] [Seterusnya]
+                    last   : [Sebelumnya] [Muat lagi] [Jana laporan] */}
+              {(() => {
+                const activeIndex = SECTION_ORDER.indexOf(activeAspect);
+                const isFirst = activeIndex === 0;
+                const isLast = activeIndex === SECTION_ORDER.length - 1;
+                return (
+                  <div className="no-print flex flex-wrap items-center justify-center gap-2">
+                    {/* Previous aspect — hidden on the first aspect. */}
+                    {!isFirst && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={NAV_BUTTON}
+                        aria-label="Aspek sebelumnya"
+                        onClick={() => goToAspectBy(-1)}
+                      >
+                        <ArrowLeft aria-hidden />
+                        Sebelumnya
+                      </Button>
+                    )}
+
+                    {/* Load more cards for the current aspect. */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={NAV_BUTTON}
+                      aria-label="Muat lebih banyak fakta"
+                      disabled={
+                        loadingMore[activeAspect] || sectionLoading[activeAspect]
+                      }
+                      onClick={() => handleLoadMore(activeAspect)}
+                    >
+                      {loadingMore[activeAspect] && (
+                        <Loader2 className="animate-spin" aria-hidden />
+                      )}
+                      Muat lagi
+                    </Button>
+
+                    {/* On the last aspect, "Jana laporan" REPLACES "Seterusnya"
+                        and reuses the same handler as the header button. */}
+                    {isLast ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={NAV_BUTTON}
+                        aria-label="Jana laporan daripada fakta dipilih"
+                        onClick={() => handleSaveReport()}
+                      >
+                        <FileOutput aria-hidden />
+                        Jana laporan
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={NAV_BUTTON}
+                        aria-label="Aspek seterusnya"
+                        onClick={() => goToAspectBy(1)}
+                      >
+                        Seterusnya
+                        <ArrowRight aria-hidden />
+                      </Button>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           )}
           </div>

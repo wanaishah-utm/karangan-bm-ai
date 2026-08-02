@@ -28,17 +28,19 @@ export function SearchBar({ value, onChange, onGenerate, loading }: SearchBarPro
           // Enter generates, but only when there's a topic and we're not busy.
           if (e.key === "Enter" && !isEmpty && !loading) onGenerate();
         }}
-        placeholder="Taip tajuk karangan… cth: Rasuah"
+        placeholder="Taip tajuk karangan..."
         className="h-10 flex-1"
       />
       <Button
         onClick={onGenerate}
         // Can't generate while loading or when the box is empty.
         disabled={loading || isEmpty}
+        // Label matches the button text so screen readers announce "Cari".
+        aria-label="Cari"
         className="h-10"
       >
         <Sparkles aria-hidden />
-        Jana
+        Cari
       </Button>
     </div>
   );

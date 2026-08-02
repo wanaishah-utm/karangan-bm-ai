@@ -83,6 +83,15 @@ export function ReportView({
 
   return (
     <div className="flex flex-col gap-6">
+      {/* PRINT-ONLY hero header (hidden on screen via the `print-only` class).
+          Mirrors the website hero: the title + a static "Jana Karangan" badge. */}
+      <div className="print-only print-hero">
+        <div className="print-hero-title">BM AI Assistant</div>
+        <div className="print-hero-rotating">
+          Jana <span className="print-hero-badge">Karangan</span>
+        </div>
+      </div>
+
       {/* Editable name + meta line */}
       <div className="flex flex-col gap-1">
         {editing ? (
@@ -138,21 +147,38 @@ export function ReportView({
         </Button>
       </div>
 
-      {/* The 5W1H sections (empty ones are skipped entirely) */}
-      <div className="flex flex-col gap-6">
-        {filledSections.map((key) => (
-          <section key={key} className="flex flex-col gap-3">
-            <h3 className="font-heading text-lg font-semibold">
-              {SECTION_LABELS[key]}
-            </h3>
-            <ol className="flex list-decimal flex-col gap-4 pl-5">
-              {report.sections[key].map((card) => (
-                <li key={card.id} className="pl-1">
-                  <p className="font-medium">{card.fact}</p>
-                  <p className="text-sm">{card.statistic}</p>
-                  <p className="text-sm text-muted-foreground">{card.currentCase}</p>
-                  <p className="text-xs text-muted-foreground">
-                    Sumber:{" "}
+      {/* The facts as a 5-column table. Wrapped in an overflow-x-auto container
+          so the wide table can scroll sideways on small screens. */}
+      <div className="report-table-wrap overflow-x-auto">
+        <table className="report-table w-full border-collapse text-left text-sm">
+          <thead>
+            {/* Header row: emerald primary background with light (foreground) text. */}
+            <tr className="bg-primary text-primary-foreground">
+              <th className="border p-2 font-semibold">Aspek</th>
+              <th className="border p-2 font-semibold">Fakta</th>
+              <th className="border p-2 font-semibold">Statistik</th>
+              <th className="border p-2 font-semibold">Contoh Kes Terkini</th>
+              <th className="border p-2 font-semibold">Sumber</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filledSections.map((key) =>
+              report.sections[key].map((card, i) => (
+                <tr key={card.id} className="align-top">
+                  {/* Show the Aspek label once per section (rowspan over its cards). */}
+                  {i === 0 && (
+                    <th
+                      scope="rowgroup"
+                      rowSpan={report.sections[key].length}
+                      className="border p-2 text-left align-top font-semibold"
+                    >
+                      {SECTION_LABELS[key]}
+                    </th>
+                  )}
+                  <td className="border p-2">{card.fact}</td>
+                  <td className="border p-2">{card.statistic}</td>
+                  <td className="border p-2">{card.currentCase}</td>
+                  <td className="border p-2">
                     <a
                       href={card.url}
                       target="_blank"
@@ -162,12 +188,12 @@ export function ReportView({
                       {card.source}
                     </a>{" "}
                     ({card.year ?? "Tiada tahun"})
-                  </p>
-                </li>
-              ))}
-            </ol>
-          </section>
-        ))}
+                  </td>
+                </tr>
+              )),
+            )}
+          </tbody>
+        </table>
       </div>
 
       {/* Export controls: print / PDF / DOCX / copy (hidden when printing) */}

@@ -1,15 +1,14 @@
 "use client";
 
 // A single 5W1H section (e.g. "Siapa"). It shows a labelled badge with a
-// "chosen / total" counter, the list of fact cards, and a "Muat lagi" button
-// that asks the AI for MORE cards for this section only.
+// "chosen / total" counter and the list of fact cards. The navigation row
+// (Sebelumnya / Muat lagi / Seterusnya / Jana laporan) lives in the page below
+// this component, since it spans the whole results view — not just one section.
 import { motion } from "framer-motion";
-import { Loader2 } from "lucide-react";
 
 import type { SectionKey, FactCard as FactCardType } from "@/types";
 import { SECTION_LABELS } from "@/types";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FactCard } from "@/components/research/fact-card";
 
@@ -18,12 +17,8 @@ interface SectionProps {
   cards: FactCardType[];
   selectedIds: Set<string>;
   onToggle: (id: string) => void;
-  // Ask the parent to fetch more cards for THIS section.
-  onLoadMore: (sectionKey: SectionKey) => void;
   // True while this section's FIRST batch is still loading (show skeletons).
   loading?: boolean;
-  // True while a "Muat lagi" request is in flight (spinner on the button).
-  loadingMore?: boolean;
 }
 
 export function Section({
@@ -31,9 +26,7 @@ export function Section({
   cards,
   selectedIds,
   onToggle,
-  onLoadMore,
   loading = false,
-  loadingMore = false,
 }: SectionProps) {
   // How many of this section's cards are currently ticked.
   const selectedCount = cards.filter((card) => selectedIds.has(card.id)).length;
@@ -42,7 +35,9 @@ export function Section({
   const showSkeletons = loading && cards.length === 0;
 
   return (
-    <section className="flex flex-col gap-3">
+    // The id is the jump target for the section-jump buttons; scroll-mt leaves a
+    // little breathing room above the heading when we scroll to it.
+    <section id={`section-${sectionKey}`} className="flex scroll-mt-4 flex-col gap-3">
       {/* Section heading: the BM label as a REAL heading (rendered as <h4> so
           the six 5W1H headings are proper, in-order headings), plus a counter. */}
       <div className="flex items-center gap-2">
@@ -83,21 +78,6 @@ export function Section({
             </motion.div>
           ))}
         </motion.div>
-      )}
-
-      {/* "Muat lagi" (Load more): only useful once the first batch has arrived. */}
-      {!showSkeletons && (
-        <div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onLoadMore(sectionKey)}
-            disabled={loadingMore || loading}
-          >
-            {loadingMore && <Loader2 className="animate-spin" />}
-            Muat lagi
-          </Button>
-        </div>
       )}
     </section>
   );

@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { Menu, X } from "lucide-react";
 
-import type { SavedReport } from "@/types";
+import type { SavedReport, SectionKey } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +20,8 @@ import { SidebarBody } from "@/components/layout/sidebar";
 interface MobileSidebarProps {
   reports: SavedReport[];
   history: string[];
+  activeAspect: SectionKey;
+  onSelectAspect: (key: SectionKey) => void;
   onOpenReport: (id: string) => void;
   onPickHistory: (topic: string) => void;
   onDataChanged: () => void;
@@ -27,10 +29,14 @@ interface MobileSidebarProps {
 
 export function MobileSidebar(props: MobileSidebarProps) {
   // Whether the overlay is open. We control it so we can auto-close it after
-  // the user picks a report or a past search.
+  // the user picks an aspect, a report, or a past search.
   const [open, setOpen] = useState(false);
 
   // Wrap the handlers so tapping an item also closes the overlay.
+  function handleSelectAspect(key: SectionKey) {
+    setOpen(false);
+    props.onSelectAspect(key);
+  }
   function handleOpenReport(id: string) {
     setOpen(false);
     props.onOpenReport(id);
@@ -77,6 +83,7 @@ export function MobileSidebar(props: MobileSidebarProps) {
         {/* The same sidebar content used on desktop. */}
         <SidebarBody
           {...props}
+          onSelectAspect={handleSelectAspect}
           onOpenReport={handleOpenReport}
           onPickHistory={handlePickHistory}
         />

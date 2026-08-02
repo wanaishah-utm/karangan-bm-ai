@@ -3,16 +3,23 @@
 // One research "fact card". The teacher ticks the ones they want to keep.
 // - The whole card is clickable to toggle selection.
 // - The source link inside must NOT toggle the card, so we stopPropagation on it.
-import { ChartBar, TriangleAlert, ExternalLink } from "lucide-react";
+import { ChartBar, Newspaper, TriangleAlert, ExternalLink } from "lucide-react";
 
 import type { FactCard as FactCardType } from "@/types";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 
-// The exact text our sample data uses when no statistic is available.
-// We compare against it to decide which icon/style to show.
+// The exact text used when no statistic is available. We compare against it to
+// decide which icon/style to show.
 const NO_STAT = "Tiada statistik rasmi ditemui";
+
+// A current case counts as "empty" if it's blank or starts with "Tiada"
+// (e.g. "Tiada kes semasa yang berkaitan").
+function hasRealCase(currentCase: string): boolean {
+  const trimmed = currentCase.trim();
+  return trimmed !== "" && !/^tiada/i.test(trimmed);
+}
 
 interface FactCardProps {
   card: FactCardType;
@@ -21,7 +28,8 @@ interface FactCardProps {
 }
 
 export function FactCard({ card, selected, onToggle }: FactCardProps) {
-  const hasStat = card.statistic !== NO_STAT;
+  const hasStat = card.statistic.trim() !== "" && card.statistic !== NO_STAT;
+  const hasCase = hasRealCase(card.currentCase);
 
   return (
     // The WHOLE card is the checkbox control: role="checkbox" + aria-checked make
@@ -40,10 +48,15 @@ export function FactCard({ card, selected, onToggle }: FactCardProps) {
         }
       }}
       className={cn(
-        "cursor-pointer transition-shadow hover:ring-foreground/20",
-        // Clear, visible focus ring for keyboard users.
-        "outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        // Highlight the card with a primary-coloured ring when selected.
+        "cursor-pointer outline-none transition-all duration-200 ease-out",
+        // Hover / keyboard-focus: a 2px emerald border + a soft shadow.
+        "hover:ring-2 hover:ring-primary hover:shadow-lg",
+        "focus-visible:ring-2 focus-visible:ring-primary focus-visible:shadow-lg",
+        // The "lift" only runs when motion is allowed (prefers-reduced-motion
+        // users keep the border/shadow change but no upward movement).
+        "motion-safe:hover:-translate-y-1 motion-safe:focus-visible:-translate-y-1",
+        // Selected: a persistent emerald ring so the picked state stays visible
+        // even without hover (the ticked checkbox reinforces it too).
         selected && "ring-2 ring-primary",
       )}
     >
@@ -61,7 +74,8 @@ export function FactCard({ card, selected, onToggle }: FactCardProps) {
           {/* The main fact */}
           <p className="font-medium">{card.fact}</p>
 
-          {/* The statistic line: chart icon if we have one, warning if we don't */}
+          {/* Statistic line — ChartBar (emerald) when present, TriangleAlert
+              (muted) when it's the "not found" text. */}
           <p
             className={cn(
               "flex items-center gap-1.5 text-sm",
@@ -71,13 +85,27 @@ export function FactCard({ card, selected, onToggle }: FactCardProps) {
             {hasStat ? (
               <ChartBar className="size-4 shrink-0 text-primary" aria-hidden />
             ) : (
-              <TriangleAlert className="size-4 shrink-0" aria-hidden />
+              <TriangleAlert className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             )}
             <span>{card.statistic}</span>
           </p>
 
-          {/* A recent, real-world case in smaller muted text */}
-          <p className="text-xs text-muted-foreground">{card.currentCase}</p>
+          {/* Current-case line — visually parallel to the statistic line above:
+              same size, its own icon (Newspaper when present, TriangleAlert when
+              empty), emerald when present and muted when empty. */}
+          <p
+            className={cn(
+              "flex items-center gap-1.5 text-sm",
+              hasCase ? "text-foreground" : "text-muted-foreground",
+            )}
+          >
+            {hasCase ? (
+              <Newspaper className="size-4 shrink-0 text-primary" aria-hidden />
+            ) : (
+              <TriangleAlert className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            )}
+            <span>{card.currentCase}</span>
+          </p>
         </div>
       </CardContent>
 

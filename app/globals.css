@@ -131,12 +131,16 @@
   }
 }
 
+/* Elements that appear ONLY on paper, never on screen (e.g. the print hero). */
+.print-only {
+  display: none;
+}
+
 /* ============================================================
    PRINT STYLES
-   When the teacher prints (or "Saves as PDF"), we hide all the
-   app chrome and show only the report — in plain black-on-white,
-   sized for A4. Anything with the `no-print` class is removed,
-   as are toasts and every button.
+   When the teacher prints (or "Saves as PDF"), we hide the app
+   chrome and show only the report as a landscape, 5-column table
+   with an emerald header — matching the on-screen design.
    ============================================================ */
 @media print {
   /* Hide interactive / non-report chrome */
@@ -144,6 +148,11 @@
   [data-sonner-toaster],
   button {
     display: none !important;
+  }
+
+  /* Reveal print-only elements (the printed hero header). */
+  .print-only {
+    display: block !important;
   }
 
   /* Force plain black text on a white page, ignoring dark mode. */
@@ -159,6 +168,13 @@
     background: transparent !important;
     box-shadow: none !important;
     border-color: #000 !important;
+  }
+
+  /* Browsers strip background colours when printing by default; this opts the
+     whole document back in so our emerald header/badge actually appear. */
+  html {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   /* Use the full page width — drop the on-screen max-width + scrolling. */
@@ -177,27 +193,82 @@
   }
   a::after {
     content: " (" attr(href) ")";
-    font-size: 0.85em;
+    font-size: 0.8em;
     word-break: break-all;
   }
 
-  /* Don't split a single fact (or a heading from its text) across pages. */
-  li {
+  /* ---- Printed hero header (mirrors the website hero) ----
+     Centred, with "BM AI Assistant" as a small label ABOVE the larger
+     "Jana Karangan" line (the emerald badge is the focal point). */
+  .print-hero {
+    margin-bottom: 0.5cm;
+    text-align: center;
+  }
+  .print-hero-title {
+    font-size: 12pt;
+    font-weight: 600;
+    line-height: 1.1;
+  }
+  .print-hero-rotating {
+    margin-top: 0.1cm;
+    font-size: 26pt;
+    font-weight: 700;
+  }
+  /* The static "Karangan" badge: emerald box with light text. A class selector
+     beats the universal `background: transparent` rule above, so it prints. */
+  .print-hero-badge {
+    display: inline-block;
+    padding: 0.02em 0.35em;
+    border-radius: 0.2em;
+    background: #059669 !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* ---- Report table ---- */
+  .report-table-wrap {
+    overflow: visible !important; /* no scroll box on paper */
+  }
+  .report-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 10pt;
+  }
+  .report-table th,
+  .report-table td {
+    border: 1px solid #000 !important; /* keep borders visible */
+    padding: 4pt 6pt !important;
+    vertical-align: top;
+  }
+  /* Header row: emerald with white text, repeated at the top of every page. */
+  .report-table thead {
+    display: table-header-group;
+  }
+  .report-table thead th {
+    background: #059669 !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* Never split a single row across two pages. */
+  .report-table tr {
     break-inside: avoid;
   }
+
   h1,
   h2,
   h3 {
     break-after: avoid;
   }
 
-  /* A4 margins + a comfortable, readable body size. */
+  /* Landscape A4 — a 5-column table is too cramped in portrait. */
   @page {
-    size: A4;
-    margin: 1.6cm;
+    size: A4 landscape;
+    margin: 1.2cm;
   }
   body {
-    font-size: 12pt;
-    line-height: 1.5;
+    font-size: 11pt;
+    line-height: 1.4;
   }
 }
