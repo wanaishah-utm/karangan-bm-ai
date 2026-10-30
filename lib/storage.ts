@@ -9,13 +9,9 @@
 // corrupt, we return a safe default instead of throwing.
 import type { SavedReport } from "@/types";
 
-// The two localStorage keys we use. Namespaced with "karangan." to avoid
-// clashing with anything else on the same domain.
+// The localStorage key we use. Namespaced with "karangan." to avoid clashing
+// with anything else on the same domain.
 const REPORTS_KEY = "karangan.reports";
-const HISTORY_KEY = "karangan.history";
-
-// Keep at most this many past searches.
-const HISTORY_LIMIT = 20;
 
 // -------------------- low-level read / write helpers --------------------
 
@@ -99,56 +95,4 @@ export function duplicateReport(id: string): SavedReport | undefined {
   reports.unshift(copy);
   writeJson(REPORTS_KEY, reports);
   return copy;
-}
-
-// -------------------- search history --------------------
-
-// Past search topics, most recent first. Always returns an array.
-export function getHistory(): string[] {
-  const history = readJson<string[]>(HISTORY_KEY, []);
-  return Array.isArray(history) ? history : [];
-}
-
-// Record a search. Most recent goes first, duplicates (ignoring letter case)
-// are removed, and the list is capped at HISTORY_LIMIT items.
-export function addToHistory(topic: string): void {
-  if (typeof window === "undefined") return;
-  const trimmed = topic.trim();
-  if (trimmed === "") return;
-
-  const existing = getHistory();
-  // Drop any earlier entry that matches, case-insensitively.
-  const deduped = existing.filter(
-    (item) => item.toLowerCase() !== trimmed.toLowerCase(),
-  );
-  deduped.unshift(trimmed); // put the newest search at the front
-
-  writeJson(HISTORY_KEY, deduped.slice(0, HISTORY_LIMIT));
-}
-
-// Wipe the whole search history.
-export function clearHistory(): void {
-  if (typeof window === "undefined") return;
-  writeJson(HISTORY_KEY, []);
-}
-
-// -------------------- backup / restore --------------------
-
-// Bundle reports + history into one JSON string (for the teacher to save/backup).
-export function exportAllData(): string {
-  return JSON.stringify({ reports: getReports(), history: getHistory() });
-}
-
-// Restore reports + history from a JSON string. Returns true on success,
-// false if the JSON is invalid.
-export function importAllData(json: string): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    const data = JSON.parse(json);
-    if (data && Array.isArray(data.reports)) writeJson(REPORTS_KEY, data.reports);
-    if (data && Array.isArray(data.history)) writeJson(HISTORY_KEY, data.history);
-    return true;
-  } catch {
-    return false;
-  }
 }

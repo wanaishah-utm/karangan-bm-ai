@@ -39,6 +39,21 @@ export function useReports() {
     setReports(storage.getReports());
   }, []);
 
+  // Replace a report's facts (e.g. after deleting some of them), then sync state.
+  const updateSections = useCallback(
+    (id: string, sections: SavedReport["sections"]) => {
+      storage.updateReport(id, { sections });
+      setReports(storage.getReports());
+    },
+    [],
+  );
+
+  // Change any other fields of a report (e.g. its peribahasa), then sync state.
+  const update = useCallback((id: string, patch: Partial<SavedReport>) => {
+    storage.updateReport(id, patch);
+    setReports(storage.getReports());
+  }, []);
+
   // Duplicate a report, sync state, and hand back the new copy.
   const duplicate = useCallback((id: string) => {
     const copy = storage.duplicateReport(id);
@@ -52,5 +67,5 @@ export function useReports() {
     setReports(storage.getReports());
   }, []);
 
-  return { reports, save, rename, duplicate, remove, refresh };
+  return { reports, save, rename, updateSections, update, duplicate, remove, refresh };
 }

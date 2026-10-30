@@ -4,7 +4,7 @@
 // feature. It's written to look tidy when pasted into WhatsApp or email —
 // no markdown, just spacing and simple labels.
 import type { SavedReport, SectionKey } from "@/types";
-import { SECTION_LABELS } from "@/types";
+import { SCOPE_LABELS, SECTION_LABELS } from "@/types";
 
 // The fixed display order of the six 5W1H sections.
 const SECTION_ORDER: SectionKey[] = [
@@ -45,12 +45,23 @@ export function buildReportText(report: SavedReport): string {
 
     cards.forEach((card, index) => {
       lines.push(`${index + 1}. ${card.fact}`);
-      lines.push(`   Statistik: ${card.statistic}`);
-      lines.push(`   Isu semasa: ${card.currentCase}`);
+      if (card.scope) lines.push(`   Skop: ${SCOPE_LABELS[card.scope]}`);
       lines.push(
         `   Sumber: ${card.source} (${card.year ?? "Tiada tahun"}) - ${card.url}`,
       );
       lines.push(""); // blank line between facts
+    });
+  }
+
+  // Suggested peribahasa — only when the teacher left them ticked for export.
+  const peribahasa = report.peribahasa ?? [];
+  if (peribahasa.length > 0 && (report.printPeribahasa ?? true)) {
+    lines.push("CADANGAN PERIBAHASA");
+    peribahasa.forEach((item, index) => {
+      lines.push(`${index + 1}. ${item.peribahasa}`);
+      lines.push(`   Maksud: ${item.maksud}`);
+      lines.push(`   Contoh: ${item.contoh}`);
+      lines.push("");
     });
   }
 

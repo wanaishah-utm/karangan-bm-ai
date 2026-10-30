@@ -18,10 +18,22 @@ export const factCardSchema = z.object({
   source: z.string(), // e.g. "SPRM", "WHO" — kept in its original form
   url: z.url(), // must be a valid URL (zod v4 top-level url validator)
   year: z.number().nullable(), // publication year, or null if unknown
+  // "dalam" (about Malaysia) or "luar" (other countries / global). Kept as a
+  // loose string here and normalised by the route, so an odd value from the AI
+  // never causes a good card to be thrown away.
+  scope: z.string().optional(),
 });
 
 // One section's worth of cards is simply an array of the above.
 export const sectionCardsSchema = z.array(factCardSchema);
+
+// One suggested peribahasa exactly as the AI should return it (the id is added
+// by our server). Empty strings are rejected so a half-filled item is dropped.
+export const peribahasaSchema = z.object({
+  peribahasa: z.string().trim().min(1),
+  maksud: z.string().trim().min(1),
+  contoh: z.string().trim().min(1),
+});
 
 // Handy TypeScript types inferred straight from the schemas.
 export type AiFactCard = z.infer<typeof factCardSchema>;

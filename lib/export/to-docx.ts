@@ -1,32 +1,37 @@
 // Builds and downloads a Microsoft Word (.docx) version of a saved report,
 // using the `docx` library to create the document and `file-saver` to save it.
 //
-// The report is rendered as a 5-column table (Aspek / Fakta / Statistik /
-// Contoh Kes Terkini / Sumber) on a LANDSCAPE page, with an emerald header row
-// and a hero header at the top — matching the on-screen and printed design.
+// The layout mirrors the PRINTED report (see the print styles in globals.css):
+//   • "Karangan BM AI Assistant" small and grey in the top-right corner of
+//     every page (the page header)
+//   • the report name, a "Tajuk · Tarikh" line and a rule beneath them
+//   • for each 5W1H aspect, a coloured title bar (white text, "N Fakta" at the
+//     right), then that aspect's facts as white boxes with a grey outline, each
+//     ending in a "Sumber: name (url) · year" line at the bottom-right
+//   • "Cadangan Peribahasa" in a gold bar, when the teacher ticked it for export
+//   • the "Sila sahkan…" reminder at the end
+// No Dalam/Luar negara labels, no big "Jana Karangan" heading — same as print.
 //
 // This runs in the BROWSER (called from a "use client" component on click), so
 // Packer.toBlob + saveAs work directly.
 import {
+  AlignmentType,
+  BorderStyle,
   Document,
+  ExternalHyperlink,
+  Header,
   Packer,
   Paragraph,
-  TextRun,
-  HeadingLevel,
-  ExternalHyperlink,
-  Table,
-  TableRow,
-  TableCell,
-  WidthType,
-  BorderStyle,
   ShadingType,
-  VerticalAlign,
-  PageOrientation,
+  TabStopType,
+  TextRun,
+  convertMillimetersToTwip,
 } from "docx";
 import { saveAs } from "file-saver";
 
 import type { SavedReport, SectionKey } from "@/types";
 import { SECTION_LABELS } from "@/types";
+import { ASPECT_COLORS, BRAND_GOLD, BRAND_INK } from "@/lib/aspect-colors";
 
 // The fixed display order of the six 5W1H sections.
 const SECTION_ORDER: SectionKey[] = [
@@ -38,20 +43,22 @@ const SECTION_ORDER: SectionKey[] = [
   "bagaimana",
 ];
 
-// Colours as hex strings (docx wants hex without the leading '#').
-const EMERALD = "059669"; // our emerald primary
 const WHITE = "FFFFFF";
+const GREY = "666666";
+const OUTLINE = "999999"; // the fact boxes' outline, as on paper
 
-// A thin black border used on every table edge.
-const BORDER = { style: BorderStyle.SINGLE, size: 4, color: "000000" } as const;
-const TABLE_BORDERS = {
-  top: BORDER,
-  bottom: BORDER,
-  left: BORDER,
-  right: BORDER,
-  insideHorizontal: BORDER,
-  insideVertical: BORDER,
-};
+// A4 portrait with the print stylesheet's 1.2cm margins.
+const PAGE_WIDTH = convertMillimetersToTwip(210);
+const PAGE_HEIGHT = convertMillimetersToTwip(297);
+const MARGIN = convertMillimetersToTwip(12);
+const TEXT_WIDTH = PAGE_WIDTH - 2 * MARGIN;
+// Boxes and bars sit slightly in from the margins so their borders show.
+const INSET = 120;
+
+// docx wants hex colours without the leading '#'.
+function hex(color: string): string {
+  return color.replace("#", "").toUpperCase();
+}
 
 // Format an ISO date string into a friendly Malay date (guarding bad values).
 function formatDate(iso: string): string {
@@ -74,153 +81,219 @@ function slugifyFilename(name: string): string {
   return cleaned === "" ? "laporan" : cleaned;
 }
 
-// A plain body cell containing one line of text.
-function textCell(text: string): TableCell {
-  return new TableCell({
-    verticalAlign: VerticalAlign.TOP,
-    children: [new Paragraph({ children: [new TextRun({ text })] })],
-  });
-}
-
 export async function exportToDocx(report: SavedReport): Promise<void> {
-  // Everything on the page, in order (paragraphs + the table).
-  const children: (Paragraph | Table)[] = [];
+  const children: Paragraph[] = [];
 
-  // --- Hero header (mirrors the website hero) ---
+  // --- Report name, topic/date line, and a rule beneath them ---
   children.push(
     new Paragraph({
-      children: [new TextRun({ text: "BM AI Assistant", bold: true, size: 44 })],
+      children: [new TextRun({ text: report.name, bold: true, size: 40 })],
+      spacing: { after: 60 },
     }),
   );
   children.push(
     new Paragraph({
       children: [
-        new TextRun({ text: "Jana ", bold: true, size: 40 }),
-        // The "Karangan" badge: white text on an emerald run background.
         new TextRun({
-          text: " Karangan ",
-          bold: true,
-          size: 40,
-          color: WHITE,
-          shading: { type: ShadingType.CLEAR, color: "auto", fill: EMERALD },
+          text: `Tajuk: ${report.topic} · Tarikh: ${formatDate(report.createdAt)}`,
+          color: GREY,
+          size: 20,
         }),
       ],
+      border: {
+        bottom: { style: BorderStyle.SINGLE, size: 6, color: "000000", space: 10 },
+      },
+      spacing: { after: 240 },
     }),
   );
-  children.push(new Paragraph({ text: "" })); // spacer
 
-  // --- Report name / topic / date ---
-  children.push(
-    new Paragraph({ text: report.name, heading: HeadingLevel.HEADING_1 }),
-  );
-  children.push(
-    new Paragraph({ children: [new TextRun({ text: `Tajuk: ${report.topic}` })] }),
-  );
-  children.push(
-    new Paragraph({
-      children: [new TextRun({ text: `Tarikh: ${formatDate(report.createdAt)}` })],
-    }),
-  );
-  children.push(new Paragraph({ text: "" })); // spacer
-
-  // --- Build the table rows ---
-  // Header row: emerald background, white bold text. tableHeader:true repeats it
-  // at the top of each page.
-  const headerRow = new TableRow({
-    tableHeader: true,
-    children: ["Aspek", "Fakta", "Statistik", "Contoh Kes Terkini", "Sumber"].map(
-      (label) =>
-        new TableCell({
-          shading: { type: ShadingType.CLEAR, color: "auto", fill: EMERALD },
-          children: [
-            new Paragraph({
-              children: [new TextRun({ text: label, bold: true, color: WHITE })],
-            }),
-          ],
-        }),
-    ),
-  });
-
-  const rows: TableRow[] = [headerRow];
-
+  // --- One coloured block per aspect ---
   for (const key of SECTION_ORDER) {
     const cards = report.sections[key] ?? [];
-    if (cards.length === 0) continue; // skip empty sections
+    if (cards.length === 0) continue; // skip empty aspects
 
-    cards.forEach((card, i) => {
-      const cells: TableCell[] = [];
+    const color = hex(ASPECT_COLORS[key]);
 
-      // The Aspek label appears once per section, spanning that section's rows.
-      if (i === 0) {
-        cells.push(
-          new TableCell({
-            rowSpan: cards.length,
-            verticalAlign: VerticalAlign.TOP,
-            children: [
-              new Paragraph({
-                children: [new TextRun({ text: SECTION_LABELS[key], bold: true })],
-              }),
-            ],
-          }),
-        );
-      }
+    // The coloured title bar: the aspect name, and "N Fakta" pushed to the
+    // right edge by a right-aligned tab stop.
+    children.push(
+      new Paragraph({
+        shading: { type: ShadingType.CLEAR, color: "auto", fill: color },
+        border: {
+          top: { style: BorderStyle.SINGLE, size: 6, color, space: 4 },
+          bottom: { style: BorderStyle.SINGLE, size: 6, color, space: 4 },
+          left: { style: BorderStyle.SINGLE, size: 6, color, space: 6 },
+          right: { style: BorderStyle.SINGLE, size: 6, color, space: 6 },
+        },
+        tabStops: [{ type: TabStopType.RIGHT, position: TEXT_WIDTH - INSET }],
+        spacing: { before: 280, after: 120 },
+        indent: { left: INSET, right: INSET },
+        keepNext: true, // never strand a title at the bottom of a page
+        children: [
+          new TextRun({ text: SECTION_LABELS[key], bold: true, color: WHITE, size: 24 }),
+          new TextRun({ text: `\t${cards.length} Fakta`, bold: true, color: WHITE, size: 16 }),
+        ],
+      }),
+    );
 
-      cells.push(textCell(card.fact));
-      cells.push(textCell(card.statistic));
-      cells.push(textCell(card.currentCase));
-
-      // Source cell: a working hyperlink on the source name, plus the year.
-      cells.push(
-        new TableCell({
-          verticalAlign: VerticalAlign.TOP,
+    // Each fact: a white box with a grey outline — the fact text, a thin
+    // divider, then the source line. Two paragraphs with different borders
+    // draw as one box with a line across it.
+    const edge = { style: BorderStyle.SINGLE, size: 6, color: OUTLINE, space: 8 };
+    for (const card of cards) {
+      children.push(
+        new Paragraph({
+          border: { top: edge, left: edge, right: edge },
+          indent: { left: INSET, right: INSET },
+          spacing: { before: 160 },
+          keepNext: true, // keep the fact with its source line
+          keepLines: true,
+          children: [new TextRun({ text: card.fact, size: 21 })],
+        }),
+      );
+      children.push(
+        new Paragraph({
+          border: { top: edge, left: edge, right: edge, bottom: edge },
+          indent: { left: INSET, right: INSET },
+          alignment: AlignmentType.RIGHT, // source sits bottom-right, like on paper
+          spacing: { after: 40 },
+          keepLines: true,
           children: [
-            new Paragraph({
-              children: [
-                new ExternalHyperlink({
-                  link: card.url,
-                  children: [
-                    new TextRun({ text: card.source, style: "Hyperlink" }),
-                  ],
-                }),
-                new TextRun({ text: ` (${card.year ?? "Tiada tahun"})` }),
-              ],
+            new TextRun({ text: "Sumber: ", size: 16, color: GREY }),
+            new ExternalHyperlink({
+              link: card.url,
+              children: [new TextRun({ text: card.source, size: 16, style: "Hyperlink" })],
+            }),
+            new TextRun({ text: ` (${card.url})`, size: 13, color: GREY }),
+            new TextRun({
+              text: ` · ${card.year ?? "Tiada tahun"}`,
+              size: 16,
+              color: GREY,
             }),
           ],
         }),
       );
-
-      rows.push(new TableRow({ children: cells }));
-    });
+    }
   }
 
-  const table = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: TABLE_BORDERS,
-    // Column width hints (in twips) tuned for a landscape A4 page.
-    columnWidths: [1500, 4800, 3400, 3400, 2400],
-    rows,
-  });
-  children.push(table);
+  // --- Suggested peribahasa (only when ticked for export) ---
+  // A gold bar with dark-brown text, then one outlined box per saying.
+  const peribahasa = report.peribahasa ?? [];
+  if (peribahasa.length > 0 && (report.printPeribahasa ?? true)) {
+    const gold = hex(BRAND_GOLD);
+    children.push(
+      new Paragraph({
+        shading: { type: ShadingType.CLEAR, color: "auto", fill: gold },
+        border: {
+          top: { style: BorderStyle.SINGLE, size: 6, color: gold, space: 4 },
+          bottom: { style: BorderStyle.SINGLE, size: 6, color: gold, space: 4 },
+          left: { style: BorderStyle.SINGLE, size: 6, color: gold, space: 6 },
+          right: { style: BorderStyle.SINGLE, size: 6, color: gold, space: 6 },
+        },
+        tabStops: [{ type: TabStopType.RIGHT, position: TEXT_WIDTH - INSET }],
+        spacing: { before: 280, after: 120 },
+        indent: { left: INSET, right: INSET },
+        keepNext: true,
+        children: [
+          new TextRun({ text: "Cadangan Peribahasa", bold: true, color: hex(BRAND_INK), size: 24 }),
+          new TextRun({
+            text: `\t${peribahasa.length} Peribahasa`,
+            bold: true,
+            color: hex(BRAND_INK),
+            size: 16,
+          }),
+        ],
+      }),
+    );
+
+    const edge = { style: BorderStyle.SINGLE, size: 6, color: OUTLINE, space: 8 };
+    for (const item of peribahasa) {
+      // Saying (top of the box), meaning, then example (bottom of the box).
+      children.push(
+        new Paragraph({
+          border: { top: edge, left: edge, right: edge },
+          indent: { left: INSET, right: INSET },
+          spacing: { before: 160 },
+          keepNext: true,
+          children: [new TextRun({ text: `“${item.peribahasa}”`, bold: true, size: 22 })],
+        }),
+      );
+      children.push(
+        new Paragraph({
+          border: { left: edge, right: edge },
+          indent: { left: INSET, right: INSET },
+          keepNext: true,
+          children: [
+            new TextRun({ text: "Maksud: ", bold: true, size: 20 }),
+            new TextRun({ text: item.maksud, size: 20 }),
+          ],
+        }),
+      );
+      children.push(
+        new Paragraph({
+          border: { left: edge, right: edge, bottom: edge },
+          indent: { left: INSET, right: INSET },
+          spacing: { after: 40 },
+          children: [
+            new TextRun({ text: "Contoh: ", bold: true, size: 20 }),
+            new TextRun({ text: item.contoh, italics: true, size: 20, color: GREY }),
+          ],
+        }),
+      );
+    }
+  }
 
   // --- Verification note ---
-  children.push(new Paragraph({ text: "" }));
   children.push(
     new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 360 },
       children: [
         new TextRun({
           text: "Sila sahkan maklumat dengan sumber asal sebelum digunakan.",
           italics: true,
+          color: GREY,
+          size: 18,
         }),
       ],
     }),
   );
 
-  // Assemble the document — a single LANDSCAPE section holding everything.
   const doc = new Document({
+    // A sans-serif like the printout (its Rubik/Poppins web fonts aren't
+    // installed with Word, but Calibri comes with every copy of Office).
+    styles: { default: { document: { run: { font: "Calibri" } } } },
     sections: [
       {
         properties: {
-          page: { size: { orientation: PageOrientation.LANDSCAPE } },
+          page: {
+            size: { width: PAGE_WIDTH, height: PAGE_HEIGHT },
+            margin: {
+              top: MARGIN,
+              bottom: MARGIN,
+              left: MARGIN,
+              right: MARGIN,
+              header: convertMillimetersToTwip(5),
+            },
+          },
+        },
+        // The app name, small and grey in the top-right corner of every page.
+        headers: {
+          default: new Header({
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.RIGHT,
+                children: [
+                  new TextRun({
+                    text: "Karangan BM AI Assistant",
+                    bold: true,
+                    size: 16,
+                    color: GREY,
+                  }),
+                ],
+              }),
+            ],
+          }),
         },
         children,
       },

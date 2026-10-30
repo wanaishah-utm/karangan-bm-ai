@@ -54,6 +54,12 @@ export function Section({
             <Skeleton key={i} className="h-28 w-full rounded-xl" />
           ))}
         </div>
+      ) : cards.length === 0 ? (
+        // Loaded, but the AI found no distinct facts for this aspect. This is a
+        // calm empty state — "Muat lagi" (in the page's nav row) is still there.
+        <p className="text-sm text-muted-foreground">
+          Tiada fakta baharu ditemui untuk aspek ini.
+        </p>
       ) : (
         // Card list. The parent controls the stagger; each child animates itself.
         <motion.div

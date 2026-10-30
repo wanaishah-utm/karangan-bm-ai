@@ -6,34 +6,37 @@
 //   selectedIds – which fact cards the teacher has ticked
 //   loading     – whether a full generation is in progress
 //
-// Generation loads ONE aspect at a time: a search fetches "siapa" first and
-// shows only that. The other five aspects load on demand when the user picks
-// them in the sidebar, and are cached once loaded. Selections (selectedIds) are
-// global, so "Jana laporan" collects ticked cards across every visited aspect.
-import { useRef, useState } from "react";
-import {
-  FileOutput,
-  ArrowLeft,
-  ArrowRight,
-  TriangleAlert,
-  Loader2,
-} from "lucide-react";
+// Three pages, switched by `view` (the header nav):
+//   home   – Laman Utama: hero, topic box and the six aspect tiles
+//   module – Modul 5W1H: one aspect's facts for the current topic
+//   report – Laporan: a saved report
+//   saved  – Simpanan: every saved report as a card (open / rename / delete)
+//
+// Generation loads ONE aspect at a time: a search fetches the chosen aspect
+// (Siapa by default) and shows only that. The other five load on demand when
+// picked, and are cached once loaded. Selections (selectedIds) are global, so
+// "Jana Laporan" collects ticked cards across every visited aspect.
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 
-import type { ResearchResult, SavedReport, SectionKey } from "@/types";
+import type {
+  FactCard,
+  ResearchResult,
+  SavedReport,
+  ScopeFilter,
+  SectionKey,
+} from "@/types";
 import { SECTION_LABELS } from "@/types";
 import { fetchSection } from "@/lib/research-client";
+import { dedupeAgainst } from "@/lib/fact-dedup";
 import { useReports } from "@/hooks/use-reports";
-import { useSearchHistory } from "@/hooks/use-search-history";
-import { Sidebar } from "@/components/layout/sidebar";
-import { MobileSidebar } from "@/components/layout/mobile-sidebar";
-import { SearchBar } from "@/components/search/search-bar";
-import { QuickTopics } from "@/components/search/quick-topics";
-import { Section } from "@/components/research/section";
+import { AppHeader, type AppView } from "@/components/layout/app-header";
+import { SiteFooter } from "@/components/layout/site-footer";
+import { Landing } from "@/components/home/landing";
+import { AspectResults } from "@/components/search/aspect-results";
 import { ReportView } from "@/components/report/report-view";
-import { RotatingText } from "@/components/ui/rotating-text";
-import { ClickEffects } from "@/components/ui/click-effects";
-import { Button } from "@/components/ui/button";
+import { SavedReports } from "@/components/report/saved-reports";
 
 // The six sections always appear in this fixed order.
 const SECTION_ORDER: SectionKey[] = [
@@ -45,16 +48,11 @@ const SECTION_ORDER: SectionKey[] = [
   "bagaimana",
 ];
 
-// How many cards to fetch per section (both first load and "Muat lagi").
-const CARDS_PER_SECTION = 8;
-
-// Shared hover/focus treatment for the bottom navigation buttons: they turn
-// emerald with readable text, gain a soft shadow, and lift slightly. The lift is
-// gated behind `motion-safe` so it's skipped when the user prefers reduced motion.
-// The `dark:hover`/`dark:focus-visible` overrides beat the outline variant's own
-// dark hover background, so the emerald wins in dark mode too.
-const NAV_BUTTON =
-  "transition-all duration-200 ease-out hover:bg-primary hover:text-primary-foreground dark:hover:bg-primary hover:shadow-lg focus-visible:bg-primary focus-visible:text-primary-foreground dark:focus-visible:bg-primary focus-visible:shadow-lg motion-safe:hover:-translate-y-0.5 motion-safe:focus-visible:-translate-y-0.5";
+// How many cards to SHOW per batch (first load and each "Muat lagi").
+const CARDS_PER_SECTION = 5;
+// We ASK the AI for a few extra, because the duplicate filter can throw away
+// near-repeats; the surplus is trimmed so each batch still adds exactly 5.
+const FETCH_BUFFER = 3;
 
 // Small helpers to build "one value per section" objects.
 function emptySections(): ResearchResult["sections"] {
@@ -83,27 +81,30 @@ export default function Home() {
   // it reliably blocks a fast double-click on "Jana" from firing two runs.
   const researchInFlight = useRef(false);
 
-  // Points at the top of the results block so the prev/next buttons can scroll
-  // back up after switching aspect.
-  const resultsRef = useRef<HTMLDivElement>(null);
-
-  // Saved reports + search history, backed by localStorage (see the hooks).
-  const { reports, save, rename, duplicate, remove, refresh: refreshReports } =
-    useReports();
+  // Saved reports, backed by localStorage (see the hook).
   const {
-    history,
-    add: addToHistory,
-    refresh: refreshHistory,
-  } = useSearchHistory();
+    reports,
+    save,
+    rename,
+    updateSections,
+    update: updateReport,
+    remove,
+  } = useReports();
 
-  // Which screen the main area shows: the search UI, or a saved report.
-  const [view, setView] = useState<"search" | "report">("search");
+  // Which page the card shows (see the top of this file).
+  const [view, setView] = useState<AppView>("home");
   const [activeReportId, setActiveReportId] = useState<string | null>(null);
+  // A report was just made with "Jana Laporan" and Laporan hasn't been opened
+  // since — the header shows a gold dot on "Laporan" until it is.
+  const [hasNewReport, setHasNewReport] = useState(false);
   // Look the active report up from state so rename/duplicate reflect instantly.
   const activeReport = reports.find((r) => r.id === activeReportId) ?? null;
 
   // Which single aspect the main area is currently showing.
   const [activeAspect, setActiveAspect] = useState<SectionKey>("siapa");
+  // Results filter: Semua / Dalam negara / Luar negara. Applies to every aspect;
+  // with a filter on, new facts are also *searched* in that scope only.
+  const [scope, setScope] = useState<ScopeFilter>("semua");
   // Which aspects have already been fetched (so re-selecting is instant and we
   // know whether an aspect still needs loading).
   const [loadedAspects, setLoadedAspects] = useState<Set<SectionKey>>(new Set());
@@ -115,12 +116,63 @@ export default function Home() {
     allSectionsFlag(false),
   );
 
+  // Whenever the page or the aspect changes, jump back to the top so the new
+  // view starts in sight. The WINDOW is the
+  // scroller (the page grows with its content; <main> doesn't scroll on its
+  // own). We scroll once immediately and once more after the crossfade settles
+  // (~300ms), because the outgoing view stays mounted while it fades and the
+  // page height shrinks under us. Instant (not smooth) so the height change
+  // can't interrupt it mid-flight.
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+    const id = setTimeout(() => window.scrollTo({ top: 0 }), 300);
+    return () => clearTimeout(id);
+  }, [view, activeAspect]);
+
+  // Get up to 5 NEW facts for one aspect, not repeating anything in `existing`.
+  // The AI sometimes repeats itself, and the duplicate filter then leaves fewer
+  // than 5 — so if we come up short we ask ONE more time (telling it what we
+  // already have) and top up. Two tries at most keeps loading time bounded. If
+  // the top-up fails we keep what the first try found; if the FIRST try fails
+  // the error propagates so the caller can report it.
+  async function fetchFreshBatch(
+    topicArg: string,
+    key: SectionKey,
+    existing: FactCard[],
+    scopeArg: ScopeFilter = "semua", // search only this scope (server-filtered)
+  ): Promise<FactCard[]> {
+    let fresh: FactCard[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (fresh.length >= CARDS_PER_SECTION) break;
+      const known = [...existing, ...fresh];
+      let batch: FactCard[];
+      try {
+        batch = await fetchSection(
+          topicArg,
+          key,
+          CARDS_PER_SECTION + FETCH_BUFFER,
+          known.map((card) => card.fact),
+          scopeArg,
+        );
+      } catch (error) {
+        if (attempt === 0) throw error;
+        break; // top-up failed — settle for what the first try gave us
+      }
+      fresh = [...fresh, ...dedupeAgainst(known, batch)];
+    }
+    return fresh.slice(0, CARDS_PER_SECTION);
+  }
+
   // Fetch one aspect's cards, store them, and mark it loaded. Returns whether it
   // succeeded. Shows the section's skeleton via `sectionLoading` while it runs.
-  async function fetchAspect(key: SectionKey, topicArg: string): Promise<boolean> {
+  async function fetchAspect(
+    key: SectionKey,
+    topicArg: string,
+    scopeArg: ScopeFilter = "semua",
+  ): Promise<boolean> {
     setSectionLoading((prev) => ({ ...prev, [key]: true }));
     try {
-      const cards = await fetchSection(topicArg, key, CARDS_PER_SECTION, []);
+      const cards = await fetchFreshBatch(topicArg, key, [], scopeArg);
       setResult((prev) =>
         prev ? { ...prev, sections: { ...prev.sections, [key]: cards } } : prev,
       );
@@ -136,27 +188,37 @@ export default function Home() {
     }
   }
 
-  // Start a fresh search: load ONLY "siapa" and show it. `overrideTopic` lets a
-  // quick-topic pill generate immediately.
-  async function handleGenerate(overrideTopic?: string) {
+  // Start a fresh search: load ONLY the starting aspect (Siapa unless a tile
+  // was picked) and open the Modul 5W1H page on it. `overrideTopic` lets a
+  // quick-topic pill generate immediately. Re-submitting the topic that is
+  // already loaded just reopens its results instead of searching again.
+  async function handleGenerate(
+    overrideTopic?: string,
+    startAspect: SectionKey = "siapa",
+  ) {
     // Safety guard: only treat overrideTopic as the topic when it's really a
     // string. This stops a stray click event (MouseEvent) from being used here.
     const raw = typeof overrideTopic === "string" ? overrideTopic : topic;
     const activeTopic = raw.trim();
     if (activeTopic === "") return; // nothing to search for
+    if (result && result.topic === activeTopic && !researchFailed) {
+      setTopic(activeTopic);
+      zoomToAspect(startAspect);
+      return;
+    }
 
     // Guard: if a run is already happening, ignore extra clicks.
     if (researchInFlight.current) return;
     researchInFlight.current = true;
 
     // Reset everything for a fresh run.
-    setView("search"); // make sure the search UI is visible
+    setView("module"); // straight to the results page, skeletons first
     setResearchFailed(false); // clear any previous error state
-    addToHistory(activeTopic); // record the search (deduped, newest first)
     setTopic(activeTopic);
     setLoading(true);
     setSelectedIds(new Set());
-    setActiveAspect("siapa"); // always start on the first aspect
+    setActiveAspect(startAspect);
+    setScope("semua"); // a new topic starts unfiltered
     setLoadedAspects(new Set());
     setLoadingMore(allSectionsFlag(false));
     setSectionLoading(allSectionsFlag(false));
@@ -168,11 +230,12 @@ export default function Home() {
     });
 
     try {
-      // Only the first aspect loads now; the rest load on demand from the sidebar.
-      const ok = await fetchAspect("siapa", activeTopic);
+      // Only the starting aspect loads now; the rest load on demand.
+      const ok = await fetchAspect(startAspect, activeTopic);
       if (!ok) {
         setResearchFailed(true);
         setResult(null);
+        setView("home"); // the error + retry live under the topic box
       }
     } finally {
       setLoading(false);
@@ -185,43 +248,101 @@ export default function Home() {
   function selectAspect(key: SectionKey) {
     setActiveAspect(key);
     if (!result) return; // no search yet — nothing to load
-    if (loadedAspects.has(key)) return; // cached → instant
     if (sectionLoading[key]) return; // already loading
-    fetchAspect(key, result.topic);
+    if (loadedAspects.has(key)) {
+      topUpScope(key, scope); // cached → instant, but fill a thin filtered view
+      return;
+    }
+    fetchAspect(key, result.topic, scope);
   }
 
-  // Move to the aspect at a given offset (-1 = previous, +1 = next) in 5W1H
-  // order, load it if needed, and scroll back to the top of the results.
-  function goToAspectBy(offset: number) {
-    const index = SECTION_ORDER.indexOf(activeAspect);
-    const target = SECTION_ORDER[index + offset];
-    if (!target) return; // no aspect in that direction
-    selectAspect(target);
-    resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  // Change the Dalam/Luar negara filter. If the current aspect then shows fewer
+  // than 5 facts in that scope, fetch more — searched in that scope only.
+  function changeScope(next: ScopeFilter) {
+    setScope(next);
+    topUpScope(activeAspect, next);
   }
 
-  // "Muat lagi": fetch 8 MORE cards for one section, telling the AI what we
-  // already have so it doesn't repeat itself, then append the new cards.
-  async function handleLoadMore(key: SectionKey) {
+  // When a filter leaves an (already loaded) aspect with fewer than 5 matching
+  // facts, load one more batch in that scope. Runs only on user actions
+  // (changing filter / aspect), never in a loop.
+  function topUpScope(key: SectionKey, scopeArg: ScopeFilter) {
+    if (!result || scopeArg === "semua") return;
+    if (!loadedAspects.has(key) || sectionLoading[key] || loadingMore[key]) return;
+    const matching = result.sections[key].filter((c) => c.scope === scopeArg).length;
+    if (matching < CARDS_PER_SECTION) handleLoadMore(key, scopeArg);
+  }
+
+  // Load + show one aspect on the Modul 5W1H page. Switching aspect from the
+  // tabs on that page uses selectAspect directly.
+  function zoomToAspect(key: SectionKey) {
+    selectAspect(key);
+    setView("module");
+  }
+
+  // A landing tile: open that aspect of the topic in the box — straight away
+  // if it's the topic already loaded, otherwise by starting a new search on it.
+  function handleTile(key: SectionKey) {
+    handleGenerate(undefined, key);
+  }
+
+  // "Laman Utama": back to the landing page. The current topic and its facts
+  // are kept, so "Modul 5W1H" (or a tile) returns to them.
+  function goHome() {
+    setView("home");
+  }
+
+  // "Modul 5W1H": the current topic's results, if there is one yet.
+  function goModule() {
+    if (result) {
+      setView("module");
+      return;
+    }
+    setView("home");
+    toast.info("Taip tajuk karangan dahulu.");
+  }
+
+  // "Laporan": the report open last, else the newest saved one.
+  function goReport() {
+    const target = activeReport ?? reports[0];
+    if (!target) {
+      toast.info("Belum ada laporan. Tandakan fakta, kemudian tekan Jana Laporan.");
+      return;
+    }
+    setActiveReportId(target.id);
+    setView("report");
+    setHasNewReport(false);
+  }
+
+  // "Simpanan": the list of every saved report.
+  function goSaved() {
+    setView("saved");
+  }
+
+  // "Muat lagi": fetch 5 MORE cards for one section, telling the AI what we
+  // already have so it doesn't repeat itself, then append the new cards. With a
+  // Dalam/Luar negara filter on, the new cards are searched in that scope.
+  async function handleLoadMore(key: SectionKey, scopeArg: ScopeFilter = scope) {
     if (!result || loadingMore[key]) return;
 
     setLoadingMore((prev) => ({ ...prev, [key]: true }));
     try {
-      const existingFacts = result.sections[key].map((card) => card.fact);
-      const more = await fetchSection(
+      // Up to 5 facts that aren't already shown (topped up if the AI repeats).
+      const more = await fetchFreshBatch(
         result.topic,
         key,
-        CARDS_PER_SECTION,
-        existingFacts,
+        result.sections[key],
+        scopeArg,
       );
-      setResult((prev) =>
-        prev
-          ? {
-              ...prev,
-              sections: { ...prev.sections, [key]: [...prev.sections[key], ...more] },
-            }
-          : prev,
-      );
+      setResult((prev) => {
+        if (!prev) return prev;
+        // Re-check against the latest list (belt-and-braces), then append.
+        const fresh = dedupeAgainst(prev.sections[key], more);
+        return {
+          ...prev,
+          sections: { ...prev.sections, [key]: [...prev.sections[key], ...fresh] },
+        };
+      });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Ralat tidak diketahui.";
@@ -276,40 +397,58 @@ export default function Home() {
     toast.success("Laporan berjaya disimpan.");
     setActiveReportId(report.id);
     setView("report");
+    setHasNewReport(true);
   }
 
-  // --- sidebar handlers ---
-  // Open a saved report from the sidebar list.
+  // --- Simpanan handlers ---
+  // Open a saved report from its card.
   function handleOpenReport(id: string) {
     setActiveReportId(id);
     setView("report");
+    setHasNewReport(false);
   }
-  // Click a past search topic → fill the box and re-run the search.
-  function handlePickHistory(pickedTopic: string) {
-    setTopic(pickedTopic);
-    handleGenerate(pickedTopic);
-  }
-
   // --- report view handlers ---
-  function handleDuplicateReport(id: string) {
-    const copy = duplicate(id);
-    if (copy) {
-      setActiveReportId(copy.id); // show the fresh copy
-      toast.success("Laporan disalin.");
-    }
-  }
+  // Delete a whole report (from the report page, or a card's trash button in
+  // Simpanan). Only if it's the report being shown do we leave the report page.
   function handleDeleteReport(id: string) {
     remove(id);
     toast.success("Laporan dipadam.");
+    if (id !== activeReportId) return;
     setActiveReportId(null);
-    setView("search"); // nothing to show, go back to search
+    if (view === "report") setView(result ? "module" : "home"); // nothing to show, go back
+  }
+  // "Padam pilihan": remove just the chosen facts. If that empties the report,
+  // there's nothing left to show, so the whole report is deleted instead.
+  function handleDeleteCards(id: string, cardIds: string[]) {
+    const report = reports.find((r) => r.id === id);
+    if (!report) return;
+    const drop = new Set(cardIds);
+    const sections = emptySections();
+    let remaining = 0;
+    for (const key of SECTION_ORDER) {
+      sections[key] = (report.sections[key] ?? []).filter(
+        (card) => !drop.has(card.id),
+      );
+      remaining += sections[key].length;
+    }
+    if (remaining === 0) {
+      handleDeleteReport(id);
+      return;
+    }
+    updateSections(id, sections);
+    toast.success(`${cardIds.length} fakta dipadam.`);
   }
 
-  // After a data restore, re-read both lists from storage so the UI updates.
-  function handleDataChanged() {
-    refreshReports();
-    refreshHistory();
-  }
+  // Aspects where the teacher has ticked at least one fact. These get the ✓ on
+  // their landing tile and results tab — merely loading an aspect
+  // doesn't count, only choosing something from it does.
+  const selectedAspects = new Set<SectionKey>(
+    result
+      ? SECTION_ORDER.filter((key) =>
+          result.sections[key].some((card) => selectedIds.has(card.id)),
+        )
+      : [],
+  );
 
   // A short Bahasa Melayu status line announced to screen readers (see the
   // aria-live region in the layout below).
@@ -325,229 +464,137 @@ export default function Home() {
           : "";
 
   return (
-    // Row on desktop (sidebar + main); on mobile the sidebar collapses into a
-    // slide-in overlay opened from the top bar.
-    <div className="flex min-h-full flex-1">
-      <Sidebar
-        reports={reports}
-        history={history}
-        activeAspect={activeAspect}
-        onSelectAspect={selectAspect}
-        onOpenReport={handleOpenReport}
-        onPickHistory={handlePickHistory}
-        onDataChanged={handleDataChanged}
-      />
+    // The golden frame: a gradient page with the app in one big rounded white
+    // card (header, the current page, footer). `overflow-clip` rounds the
+    // card's corners WITHOUT making it a scroll container, so the sticky header
+    // and the results page's sticky panel still pin to the window.
+    <div className="app-frame flex min-h-full min-w-0 flex-1 flex-col bg-gradient-to-b from-[#eab308] via-[#f59e0b] to-[#d97706] p-2 sm:p-6 lg:p-8 dark:from-[#3a2906] dark:via-[#271b04] dark:to-[#170f02] print:bg-none print:p-0">
+      <p className="no-print mx-auto mb-2 flex w-full max-w-[1240px] items-center justify-between px-2 font-heading text-xs font-bold tracking-wide text-white sm:mb-3 sm:text-sm">
+        Karangan BM AI Assistant – SPM KSSM
+        <span className="hidden text-xs font-medium text-amber-50/80 sm:inline">
+          Modul 5W1H Interaktif
+        </span>
+      </p>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Mobile top bar with the hamburger menu (desktop hides it). */}
-        <div className="no-print flex items-center gap-2 border-b p-3 md:hidden">
-          <MobileSidebar
-            reports={reports}
-            history={history}
-            activeAspect={activeAspect}
-            onSelectAspect={selectAspect}
-            onOpenReport={handleOpenReport}
-            onPickHistory={handlePickHistory}
-            onDataChanged={handleDataChanged}
-          />
-          <span className="font-heading text-sm font-semibold">BM AI Assistant</span>
-        </div>
+      <div className="app-card mx-auto flex w-full max-w-[1240px] flex-1 flex-col overflow-clip rounded-[24px] border border-amber-200/40 bg-card shadow-2xl sm:rounded-[36px] dark:border-amber-500/15 print:rounded-none print:border-0 print:shadow-none">
+        <AppHeader
+          view={view}
+          onHome={goHome}
+          onModule={goModule}
+          onReport={goReport}
+          onSaved={goSaved}
+          // Not while reading a report — only once the student has moved on.
+          showReportDot={hasNewReport && view !== "report"}
+        />
 
         {/* Screen-reader-only live region announcing research progress in BM. */}
         <p className="sr-only" role="status" aria-live="polite">
           {srStatus}
         </p>
 
-        {/* Main area scrolls on its own so the sidebar stays put. */}
-        <main className="flex-1 overflow-y-auto">
-        {view === "report" && activeReport ? (
-          // ---------- REPORT VIEW ----------
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
-            <div className="no-print">
-              <Button variant="ghost" size="sm" onClick={() => setView("search")}>
-                <ArrowLeft aria-hidden />
-                Kembali ke carian
-              </Button>
-            </div>
-            <ReportView
-              report={activeReport}
-              onRename={rename}
-              onDuplicate={handleDuplicateReport}
-              onDelete={handleDeleteReport}
-            />
-          </div>
-        ) : (
-          // ---------- SEARCH VIEW ----------
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-6">
-          {/* Search chrome (heading, search box, quick topics) — hidden in print.
-              `relative` so the click-effects layer can sit absolutely behind it. */}
-          <div className="no-print relative flex flex-col gap-8">
-            {/* Decorative click-effects layer — BEHIND the hero content (z-0) and
-                scoped to this box only, so it never fires on the sidebar, results,
-                fact cards, or report view. */}
-            <ClickEffects
-              className="no-print absolute inset-0 z-0"
-              mode="rings"
-              duration={0.3}
-              strokeWidth={1.5}
-              effectSize={60}
-              showLabel={false}
-            />
-
-            {/* Hero content sits ABOVE the layer (z-10). It's pointer-events-none
-                so clicks on empty space fall through to the effects layer, while
-                the real controls re-enable pointer events so they stay clickable. */}
-            <div className="pointer-events-none relative z-10 flex flex-col gap-8">
-              {/* Heading + animated rotating headline.
-                  The heading stays the real, accessible page heading; the rotating
-                  text below it is decorative and cycles Jana Karangan/Idea/… */}
-              <div className="flex flex-col items-center gap-3 text-center">
-                <h2 className="font-heading text-2xl font-semibold sm:text-3xl">
-                  BM AI Assistant
-                </h2>
-                <RotatingText
-                  className="no-print"
-                  prefix="Jana"
-                  texts={["Karangan", "Idea", "Fakta", "Statistik", "Bahan"]}
+        {/* `grid` + gridArea 1/1 on every page stacks them in the SAME cell, so
+            during a swap the old page fades out while the new one fades in on
+            top of it (a true crossfade — no empty gap between them). */}
+        <main className="grid flex-1 bg-warm print:bg-transparent">
+          <AnimatePresence initial={false}>
+            {view === "saved" ? (
+              <motion.div
+                key="saved"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0, pointerEvents: "none" }}
+                transition={{ duration: 0.25, ease: "easeOut" }}
+                style={{ gridArea: "1 / 1" }}
+                className="min-w-0"
+              >
+                <SavedReports
+                  reports={reports}
+                  onOpen={handleOpenReport}
+                  onRename={rename}
+                  onDelete={handleDeleteReport}
+                  onHome={goHome}
                 />
-              </div>
-
-              {/* Search box (wired to topic + loading) */}
-              <div className="pointer-events-auto">
-                <SearchBar
-                  value={topic}
-                  onChange={setTopic}
-                  // Wrap so no click event is passed in as `overrideTopic`.
+              </motion.div>
+            ) : view === "report" && activeReport ? (
+              <motion.div
+                key="report"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0, pointerEvents: "none" }}
+                transition={{ duration: 0.25, ease: "easeOut" }}
+                style={{ gridArea: "1 / 1" }}
+                className="mx-auto w-full max-w-3xl px-3 py-8 sm:px-6 sm:py-10 print:max-w-none print:p-0"
+              >
+                <ReportView
+                  key={activeReport.id}
+                  report={activeReport}
+                  onRename={rename}
+                  onDelete={handleDeleteReport}
+                  onDeleteCards={handleDeleteCards}
+                  onUpdate={updateReport}
+                />
+              </motion.div>
+            ) : view === "module" && result ? (
+              <motion.div
+                key="module"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0, pointerEvents: "none" }}
+                transition={{ duration: 0.25, ease: "easeOut" }}
+                style={{ gridArea: "1 / 1" }}
+                className="min-w-0"
+              >
+                {/* key=activeAspect remounts the page (replays the card
+                    stagger) whenever the aspect changes. */}
+                <AspectResults
+                  key={activeAspect}
+                  topic={result.topic}
+                  aspectKey={activeAspect}
+                  cards={result.sections[activeAspect]}
+                  selectedIds={selectedIds}
+                  onToggle={toggleId}
+                  loading={sectionLoading[activeAspect]}
+                  loadingMore={loadingMore[activeAspect]}
+                  onLoadMore={() => handleLoadMore(activeAspect)}
+                  scope={scope}
+                  onScopeChange={changeScope}
+                  onSelectAspect={selectAspect}
+                  selectedAspects={selectedAspects}
+                  sectionLoading={sectionLoading}
+                  onSaveReport={() => handleSaveReport()}
+                />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="home"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0, pointerEvents: "none" }}
+                transition={{ duration: 0.25, ease: "easeOut" }}
+                style={{ gridArea: "1 / 1" }}
+                className="min-w-0 bg-card"
+              >
+                <Landing
+                  topic={topic}
+                  onTopicChange={setTopic}
+                  // Wrap so no submit event is passed in as `overrideTopic`.
                   onGenerate={() => handleGenerate()}
-                  loading={loading}
-                />
-              </div>
-
-              {/* Quick topics: fill the box AND generate straight away */}
-              <div className="pointer-events-auto">
-                <QuickTopics
-                  onPick={(picked) => {
+                  onPickTopic={(picked) => {
                     setTopic(picked);
                     handleGenerate(picked);
                   }}
+                  loading={loading}
+                  researchFailed={researchFailed}
+                  onSelectAspect={handleTile}
+                  selectedAspects={selectedAspects}
+                  sectionLoading={sectionLoading}
                 />
-              </div>
-            </div>
-          </div>
-
-          {/* If the initial search failed, show a clear error state with a retry. */}
-          {researchFailed && (
-            <div
-              role="alert"
-              className="flex flex-col items-center gap-3 rounded-lg border border-destructive/40 p-6 text-center"
-            >
-              <TriangleAlert className="size-8 text-destructive" aria-hidden />
-              <p className="font-medium">Penyelidikan gagal.</p>
-              <p className="text-sm text-muted-foreground">
-                Sila semak sambungan internet anda dan cuba lagi.
-              </p>
-              <Button onClick={() => handleGenerate()}>Cuba lagi</Button>
-            </div>
-          )}
-
-          {/* Show ONLY the active aspect. Other aspects load when picked from the
-              sidebar (see selectAspect). Selections persist across aspects. */}
-          {result && (
-            <div ref={resultsRef} className="flex scroll-mt-4 flex-col gap-6">
-              <div className="no-print flex items-center justify-between gap-2">
-                <h3 className="font-heading text-lg font-semibold">
-                  Laporan: {result.topic}
-                </h3>
-                <Button onClick={() => handleSaveReport()}>
-                  <FileOutput aria-hidden />
-                  Jana laporan
-                </Button>
-              </div>
-
-              {/* key=activeAspect remounts the section (fresh skeleton) on switch */}
-              <Section
-                key={activeAspect}
-                sectionKey={activeAspect}
-                cards={result.sections[activeAspect]}
-                selectedIds={selectedIds}
-                onToggle={toggleId}
-                loading={sectionLoading[activeAspect]}
-              />
-
-              {/* Bottom navigation row — changes with the active aspect:
-                    first  : [Muat lagi] [Seterusnya]
-                    middle : [Sebelumnya] [Muat lagi] [Seterusnya]
-                    last   : [Sebelumnya] [Muat lagi] [Jana laporan] */}
-              {(() => {
-                const activeIndex = SECTION_ORDER.indexOf(activeAspect);
-                const isFirst = activeIndex === 0;
-                const isLast = activeIndex === SECTION_ORDER.length - 1;
-                return (
-                  <div className="no-print flex flex-wrap items-center justify-center gap-2">
-                    {/* Previous aspect — hidden on the first aspect. */}
-                    {!isFirst && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={NAV_BUTTON}
-                        aria-label="Aspek sebelumnya"
-                        onClick={() => goToAspectBy(-1)}
-                      >
-                        <ArrowLeft aria-hidden />
-                        Sebelumnya
-                      </Button>
-                    )}
-
-                    {/* Load more cards for the current aspect. */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className={NAV_BUTTON}
-                      aria-label="Muat lebih banyak fakta"
-                      disabled={
-                        loadingMore[activeAspect] || sectionLoading[activeAspect]
-                      }
-                      onClick={() => handleLoadMore(activeAspect)}
-                    >
-                      {loadingMore[activeAspect] && (
-                        <Loader2 className="animate-spin" aria-hidden />
-                      )}
-                      Muat lagi
-                    </Button>
-
-                    {/* On the last aspect, "Jana laporan" REPLACES "Seterusnya"
-                        and reuses the same handler as the header button. */}
-                    {isLast ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={NAV_BUTTON}
-                        aria-label="Jana laporan daripada fakta dipilih"
-                        onClick={() => handleSaveReport()}
-                      >
-                        <FileOutput aria-hidden />
-                        Jana laporan
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={NAV_BUTTON}
-                        aria-label="Aspek seterusnya"
-                        onClick={() => goToAspectBy(1)}
-                      >
-                        Seterusnya
-                        <ArrowRight aria-hidden />
-                      </Button>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-          )}
-          </div>
-        )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </main>
+
+        <SiteFooter />
       </div>
     </div>
   );

@@ -22,14 +22,16 @@ interface QuickTopicsProps {
 
 export function QuickTopics({ onPick }: QuickTopicsProps) {
   return (
-    <div className="flex flex-wrap items-center justify-center gap-2">
-      <span className="text-sm text-muted-foreground">Tajuk popular:</span>
+    // A quiet secondary row: the pills must never out-shout the golden topic
+    // box, so they stay light until hover, where they pick up a gold wash.
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="mr-1 text-xs text-muted-foreground">Cuba tajuk popular</span>
       {QUICK_TOPICS.map((topic) => (
         <Button
           key={topic}
           variant="outline"
           size="sm"
-          className="rounded-full" // pill shape
+          className="h-7 rounded-full border-amber-200 bg-transparent px-3 text-xs font-normal text-muted-foreground transition-colors hover:border-amber-400 hover:bg-amber-50 hover:text-amber-900 dark:border-amber-900/50 dark:bg-transparent dark:hover:bg-amber-400/10 dark:hover:text-amber-200"
           onClick={() => onPick(topic)}
         >
           {topic}

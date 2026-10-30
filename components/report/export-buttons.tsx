@@ -1,12 +1,15 @@
 "use client";
 
-// A row of export buttons shown on a saved report:
+// The row of actions at the bottom of a saved report:
 //   Cetak            → open the browser print dialog
-//   Simpan PDF       → print dialog again, with a hint to pick "Save as PDF"
 //   Muat turun DOCX  → build + download a Word file
 //   Salin            → copy a plain-text version to the clipboard
+//   Kongsi           → the device's share sheet (copies instead where the
+//                      browser has no share sheet, e.g. most desktops)
+//   (children)       → extra trailing buttons, e.g. the report's "Padam"
 import { useState } from "react";
-import { Printer, FileDown, FileType, Copy, Loader2 } from "lucide-react";
+import type { ReactNode } from "react";
+import { Printer, FileType, Copy, Loader2, Share2 } from "lucide-react";
 import { toast } from "sonner";
 
 import type { SavedReport } from "@/types";
@@ -14,21 +17,19 @@ import { Button } from "@/components/ui/button";
 import { buildReportText } from "@/lib/export/report-text";
 import { exportToDocx } from "@/lib/export/to-docx";
 
-export function ExportButtons({ report }: { report: SavedReport }) {
+export function ExportButtons({
+  report,
+  children,
+}: {
+  report: SavedReport;
+  children?: ReactNode;
+}) {
   // True while the DOCX is being generated (disables the button + shows spinner).
   const [docxLoading, setDocxLoading] = useState(false);
 
-  // Plain print → the user can pick any printer.
+  // Plain print → the user can pick any printer (incl. "Save as PDF").
   function handlePrint() {
     window.print();
-  }
-
-  // "Save PDF" is really just printing — most browsers offer "Save as PDF" as a
-  // print destination, so we tell the user that, then open the print dialog.
-  function handlePdf() {
-    toast.info('Dalam dialog cetak, pilih "Simpan sebagai PDF" sebagai destinasi.');
-    // Small delay so the toast is visible before the print dialog blocks the page.
-    setTimeout(() => window.print(), 400);
   }
 
   // Build + download the Word document.
@@ -59,16 +60,28 @@ export function ExportButtons({ report }: { report: SavedReport }) {
     }
   }
 
+  // Share through the device's share sheet (WhatsApp, email, …). Without one,
+  // fall back to copying. Closing the sheet (AbortError) is not an error.
+  async function handleShare() {
+    const text = buildReportText(report);
+    if (!navigator.share) {
+      await handleCopy();
+      return;
+    }
+    try {
+      await navigator.share({ title: report.name, text });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      toast.error("Gagal berkongsi. Cuba Salin sebagai ganti.");
+    }
+  }
+
   return (
     // `no-print` so these controls don't appear on the printed page.
-    <div className="no-print flex flex-wrap gap-2">
+    <div className="no-print flex flex-wrap justify-center gap-2">
       <Button variant="outline" size="sm" onClick={handlePrint}>
         <Printer />
         Cetak
-      </Button>
-      <Button variant="outline" size="sm" onClick={handlePdf}>
-        <FileDown />
-        Simpan PDF
       </Button>
       <Button
         variant="outline"
@@ -83,6 +96,11 @@ export function ExportButtons({ report }: { report: SavedReport }) {
         <Copy />
         Salin
       </Button>
+      <Button variant="outline" size="sm" onClick={handleShare}>
+        <Share2 />
+        Kongsi
+      </Button>
+      {children}
     </div>
   );
 }

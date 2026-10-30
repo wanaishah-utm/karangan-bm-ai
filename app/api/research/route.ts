@@ -7,9 +7,11 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { z } from "zod";
 
-import type { FactCard } from "@/types";
+import type { FactCard, FactScope } from "@/types";
 import { factCardSchema } from "@/lib/ai/schema";
 import { buildSectionPrompt } from "@/lib/ai/prompt";
+import { dedupeCards } from "@/lib/fact-dedup";
+import { clientIp, extractJsonArray, isRateLimited } from "@/lib/ai/route-helpers";
 
 // AI research can take a while (web search + generation), so allow up to 60s.
 export const maxDuration = 60;
@@ -20,60 +22,32 @@ const MODEL = "gpt-4.1-mini";
 // How many cards to request if the caller doesn't say.
 const DEFAULT_COUNT = 8;
 
-// --- Best-effort in-memory rate limit --------------------------------------
-// Allows at most RATE_LIMIT requests per IP within RATE_WINDOW_MS. This is
-// intentionally simple: it lives in memory, so it resets when the server
-// restarts and is NOT shared across multiple server instances (e.g. serverless).
-// It's a light guard against accidental spamming, not a security feature.
-const RATE_LIMIT = 20; // max requests
-const RATE_WINDOW_MS = 60_000; // per 60 seconds
-const requestLog = new Map<string, number[]>();
-
-function isRateLimited(ip: string): boolean {
-  const now = Date.now();
-  // Keep only the timestamps still inside the time window.
-  const recent = (requestLog.get(ip) ?? []).filter(
-    (time) => now - time < RATE_WINDOW_MS,
-  );
-  recent.push(now);
-  requestLog.set(ip, recent);
-  return recent.length > RATE_LIMIT;
-}
-
 // Validate the incoming request body. All the six 5W1H keys are allowed.
 const bodySchema = z.object({
   topic: z.string().min(1, "Tajuk tidak boleh kosong."),
   section: z.enum(["siapa", "apa", "bila", "di_mana", "mengapa", "bagaimana"]),
   count: z.number().int().positive().max(20).optional(),
   existingFacts: z.array(z.string()).optional(),
+  // Results filter: "dalam" / "luar" restrict the search; "semua" = no filter.
+  scope: z.enum(["semua", "dalam", "luar"]).optional(),
 });
 
-// Pull a clean JSON array out of the model's text output. The model is told to
-// return raw JSON, but this guards against stray code fences or prose.
-function extractJsonArray(text: string): string {
-  let t = text.trim();
-
-  // Strip a ```json ... ``` (or plain ``` ... ```) code fence if present.
-  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) t = fence[1].trim();
-
-  // If there's leading/trailing prose, keep only the outermost [ ... ].
-  if (!t.startsWith("[")) {
-    const start = t.indexOf("[");
-    const end = t.lastIndexOf("]");
-    if (start !== -1 && end !== -1 && end > start) {
-      t = t.slice(start, end + 1);
-    }
+// Turn the AI's scope tag into "dalam" / "luar". If it's missing or unclear,
+// fall back to the link: Malaysian (.my) sites count as dalam negara.
+function resolveScope(aiScope: string | undefined, url: string): FactScope {
+  const tag = (aiScope ?? "").toLowerCase();
+  if (tag.includes("dalam")) return "dalam";
+  if (tag.includes("luar")) return "luar";
+  try {
+    return new URL(url).hostname.endsWith(".my") ? "dalam" : "luar";
+  } catch {
+    return "luar";
   }
-  return t;
 }
 
 export async function POST(request: Request) {
-  // 0) Best-effort rate limit. The client IP comes from the x-forwarded-for
-  //    header (set by hosting proxies like Vercel); fall back to "unknown".
-  const ip =
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  if (isRateLimited(ip)) {
+  // 0) Best-effort rate limit (see lib/ai/route-helpers.ts).
+  if (isRateLimited(clientIp(request))) {
     return NextResponse.json(
       { error: "Terlalu banyak permintaan. Sila cuba semula sebentar lagi." },
       { status: 429 },
@@ -102,12 +76,13 @@ export async function POST(request: Request) {
   const { topic, section } = parsed.data;
   const count = parsed.data.count ?? DEFAULT_COUNT;
   const existingFacts = parsed.data.existingFacts ?? [];
+  const scope = parsed.data.scope ?? "semua";
 
   // 2) Ask the AI (with web search) for this section's cards.
   try {
     // `new OpenAI()` automatically reads OPENAI_API_KEY from the environment.
     const client = new OpenAI();
-    const prompt = buildSectionPrompt(topic, section, count, existingFacts);
+    const prompt = buildSectionPrompt(topic, section, count, existingFacts, scope);
 
     const response = await client.responses.create({
       model: MODEL,
@@ -143,12 +118,25 @@ export async function POST(request: Request) {
     for (const item of rawArray) {
       const result = factCardSchema.safeParse(item);
       if (result.success) {
-        cards.push({ id: crypto.randomUUID(), ...result.data });
+        const { scope: aiScope, ...rest } = result.data;
+        const cardScope = resolveScope(aiScope, rest.url);
+        // With a filter on, drop any card the AI placed in the wrong scope.
+        if (scope !== "semua" && cardScope !== scope) continue;
+        cards.push({ id: crypto.randomUUID(), ...rest, scope: cardScope });
       }
       // If a card fails validation we simply skip it.
     }
 
-    return NextResponse.json({ cards });
+    // 5) Remove duplicate / near-duplicate facts (the model sometimes pads the
+    //    list by repeating a fact). Returning fewer, distinct cards is fine.
+    const { kept, dropped } = dedupeCards(cards);
+    if (dropped > 0) {
+      console.log(
+        `[/api/research] ${section}: membuang ${dropped} kad pendua (${kept.length} kekal).`,
+      );
+    }
+
+    return NextResponse.json({ cards: kept });
   } catch (error) {
     // Never leak internal details (or the API key) to the client — log on the
     // server only, and send a friendly Bahasa Melayu message back.

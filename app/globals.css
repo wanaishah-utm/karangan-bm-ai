@@ -7,9 +7,12 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  --font-sans: var(--font-rubik);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-heading: var(--font-poppins);
+  --color-warm: var(--warm);
+  --color-gold: var(--gold);
+  --color-gold-ink: var(--gold-ink);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -55,8 +58,9 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.596 0.145 163.225);
-  --primary-foreground: oklch(0.985 0 0);
+  /* Brand: golden yellow with dark-brown text on it (never white). */
+  --primary: #eab308;
+  --primary-foreground: #422006;
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
@@ -68,7 +72,7 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.596 0.145 163.225);
+  --ring: #eab308;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -83,17 +87,22 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* Warm off-white for content areas inside the white card, and the gold pair. */
+  --warm: #fffdf7;
+  --gold: #eab308;
+  --gold-ink: #422006;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  /* Warm (brown-tinted) darks so the golden accents feel at home. */
+  --background: oklch(0.17 0.01 70);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
+  --card: oklch(0.21 0.012 70);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
+  --popover: oklch(0.21 0.012 70);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.696 0.17 162.48);
-  --primary-foreground: oklch(0.262 0.051 172.552);
+  --primary: #facc15;
+  --primary-foreground: #422006;
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
@@ -103,7 +112,7 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.696 0.17 162.48);
+  --ring: #facc15;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -117,6 +126,9 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --warm: oklch(0.19 0.012 70);
+  --gold: #facc15;
+  --gold-ink: #422006;
 }
 
 @layer base {
@@ -131,6 +143,22 @@
   }
 }
 
+/* The landing illustration's aspect circles bob up and down a little. */
+@keyframes hero-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hero-float {
+    animation: hero-float 4s ease-in-out infinite;
+  }
+}
+
 /* Elements that appear ONLY on paper, never on screen (e.g. the print hero). */
 .print-only {
   display: none;
@@ -139,18 +167,20 @@
 /* ============================================================
    PRINT STYLES
    When the teacher prints (or "Saves as PDF"), we hide the app
-   chrome and show only the report as a landscape, 5-column table
-   with an emerald header — matching the on-screen design.
+   chrome and show only the report: coloured aspect title bars
+   with their facts stacked beneath — matching the on-screen design.
    ============================================================ */
 @media print {
-  /* Hide interactive / non-report chrome */
-  .no-print,
+  /* Hide interactive / non-report chrome. `html .no-print` is deliberately
+     more specific than the block-flow rules below (e.g. `.report-aspect`), so
+     a block marked no-print stays hidden even when it also has one of those. */
+  html .no-print,
   [data-sonner-toaster],
   button {
     display: none !important;
   }
 
-  /* Reveal print-only elements (the printed hero header). */
+  /* Reveal print-only elements (the app name in the corner). */
   .print-only {
     display: block !important;
   }
@@ -191,69 +221,106 @@
   a {
     text-decoration: underline;
   }
+  /* Plain inline text, so "Sumber: name (url) · year" wraps like a sentence
+     instead of squeezing the name and URL into side-by-side columns. */
+  a {
+    display: inline !important;
+  }
+  /* The "opens in a new tab" icon means nothing on paper, and as a block-level
+     svg it would push the URL onto its own line. */
+  a svg {
+    display: none !important;
+  }
   a::after {
     content: " (" attr(href) ")";
     font-size: 0.8em;
     word-break: break-all;
   }
 
-  /* ---- Printed hero header (mirrors the website hero) ----
-     Centred, with "BM AI Assistant" as a small label ABOVE the larger
-     "Jana Karangan" line (the emerald badge is the focal point). */
-  .print-hero {
-    margin-bottom: 0.5cm;
-    text-align: center;
-  }
-  .print-hero-title {
-    font-size: 12pt;
+  /* ---- App name, top-right corner ----
+     Page 1 has NO top margin (see @page :first below), which leaves the
+     browser no room for its own header (date + page title). Chrome then drops
+     that header on every page, so this corner label is the only one. */
+  .print-brand {
+    padding-top: 1.2cm;
+    margin-bottom: 0.2cm;
+    text-align: right;
+    font-family: var(--font-poppins), sans-serif;
+    font-size: 8pt;
     font-weight: 600;
-    line-height: 1.1;
-  }
-  .print-hero-rotating {
-    margin-top: 0.1cm;
-    font-size: 26pt;
-    font-weight: 700;
-  }
-  /* The static "Karangan" badge: emerald box with light text. A class selector
-     beats the universal `background: transparent` rule above, so it prints. */
-  .print-hero-badge {
-    display: inline-block;
-    padding: 0.02em 0.35em;
-    border-radius: 0.2em;
-    background: #059669 !important;
-    color: #fff !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+    color: #666 !important;
   }
 
-  /* ---- Report table ---- */
-  .report-table-wrap {
-    overflow: visible !important; /* no scroll box on paper */
-  }
-  .report-table {
-    width: 100% !important;
-    border-collapse: collapse !important;
-    font-size: 10pt;
-  }
-  .report-table th,
-  .report-table td {
-    border: 1px solid #000 !important; /* keep borders visible */
-    padding: 4pt 6pt !important;
-    vertical-align: top;
-  }
-  /* Header row: emerald with white text, repeated at the top of every page. */
-  .report-table thead {
-    display: table-header-group;
-  }
-  .report-table thead th {
-    background: #059669 !important;
+  /* ---- Report: coloured aspect title bars + stacked fact boxes ----
+     The universal rule above wipes every background, so the aspect title bar
+     re-applies its own colour (passed in as --aspect-color) with white text.
+     A class selector + !important beats the universal `*` rule. */
+  .report-aspect-head {
+    background: var(--aspect-color) !important;
     color: #fff !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+    break-after: avoid; /* never strand a title at the bottom of a page */
   }
-  /* Never split a single row across two pages. */
-  .report-table tr {
-    break-inside: avoid;
+  /* Its icon and "2 Fakta" count stay white too (the universal rule above
+     would otherwise turn them black). */
+  .report-aspect-head * {
+    color: #fff !important;
+  }
+  /* Plain block flow on paper. Chrome mis-paginates flex/grid columns: when a
+     fact box is pushed to the next page (break-inside: avoid), the rest of
+     the column doesn't move down with it, so later boxes overlap and the end
+     of the report spills past the card and gets clipped. Block flow paginates
+     correctly, so the gaps become margins. */
+  body,
+  .app-frame,
+  .app-card,
+  main,
+  main > *,
+  .report-card,
+  .report-sections,
+  .report-aspect,
+  .report-aspect > ul {
+    display: block !important;
+    overflow: visible !important;
+  }
+  .report-card > * + *,
+  .report-sections > * + * {
+    margin-top: 0.5cm !important;
+  }
+  .report-aspect > * + * {
+    margin-top: 0.2cm !important;
+  }
+  .report-aspect > ul > li + li {
+    margin-top: 0.25cm !important;
+  }
+  /* The source line spans the full box width, right-aligned (the scope chip
+     beside it is screen-only), so short sources stay on one line. */
+  .report-fact-meta {
+    display: block !important;
+    text-align: right;
+  }
+
+  /* "Cadangan Peribahasa" bar: gold with dark-brown text, kept on paper. */
+  .report-peribahasa-head,
+  .report-peribahasa-head * {
+    color: #422006 !important;
+  }
+  .report-peribahasa-head {
+    background: #eab308 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    break-after: avoid;
+  }
+
+  /* The on-screen report card is just a frame — no outline on paper. */
+  .report-card {
+    border: none !important;
+    padding: 0 !important;
+  }
+  .report-fact {
+    border: 1px solid #999 !important; /* soft outline instead of the tint */
+    break-inside: avoid; /* never split one fact across two pages */
   }
 
   h1,
@@ -262,10 +329,24 @@
     break-after: avoid;
   }
 
-  /* Landscape A4 — a 5-column table is too cramped in portrait. */
+  /* Portrait A4 — the stacked aspect layout reads top-to-bottom. Pages 2+
+     carry the app name in their top-right margin. */
   @page {
-    size: A4 landscape;
+    size: A4 portrait;
     margin: 1.2cm;
+
+    @top-right {
+      content: "Karangan BM AI Assistant";
+      font-family: var(--font-poppins), sans-serif;
+      font-size: 8pt;
+      font-weight: 600;
+      color: #666;
+    }
+  }
+  /* No top margin on page 1: the .print-brand label sits there instead, and
+     the missing room stops the browser printing its own header. */
+  @page :first {
+    margin-top: 0;
   }
   body {
     font-size: 11pt;
