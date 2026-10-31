@@ -105,8 +105,8 @@ ${factBlock}
 TUGAS: Cadangkan SEHINGGA ${count} peribahasa Melayu yang paling sesuai digunakan dalam karangan bertajuk ini, berdasarkan fakta di atas.
 
 PERATURAN WAJIB:
-1. Gunakan HANYA peribahasa Melayu yang SAHIH dan sudah dibukukan (contohnya dalam Kamus Istimewa Peribahasa Melayu atau Pusat Rujukan Persuratan Melayu DBP, prpm.dbp.gov.my). JANGAN sekali-kali mereka-reka peribahasa baharu atau mengubah susunan katanya.
-2. Gunakan carian web untuk menyemak bentuk dan maksud peribahasa yang tepat sebelum mencadangkannya. Jika ragu-ragu tentang sesuatu peribahasa, JANGAN masukkan.
+1. Gunakan HANYA peribahasa Melayu yang SAHIH dan sudah dibukukan dalam Kamus Istimewa Peribahasa Melayu atau Pusat Rujukan Persuratan Melayu DBP (prpm.dbp.gov.my), dan tulis MENGIKUT BENTUK dalam kamus itu. JANGAN sekali-kali mereka-reka peribahasa baharu, mengubah susunan katanya, atau menterjemah simpulan bahasa Inggeris (contohnya "membakar jambatan" BUKAN peribahasa Melayu). Setiap cadangan akan disemak dengan PRPM DBP dan yang tidak tersenarai akan digugurkan.
+2. Jika ragu-ragu tentang sesuatu peribahasa, JANGAN masukkan.
 3. Pilih berdasarkan MAKSUD: maksud peribahasa mesti benar-benar sepadan dengan isi fakta di atas (contohnya punca, kesan, peranan pihak tertentu atau langkah mengatasi isu). Tanya diri sendiri: adakah guru Bahasa Melayu akan menerima peribahasa ini dalam karangan bertajuk ini? Jika tidak, JANGAN masukkan.
 4. Utamakan peribahasa yang LAZIM digunakan dalam karangan SPM dan dikenali pelajar. JANGAN memilih peribahasa mengikut abjad atau mengambil beberapa peribahasa yang bermula dengan perkataan yang sama.
 5. "maksud" ialah maksud standard peribahasa itu dalam Bahasa Melayu formal, seperti yang tercatat dalam sumber rujukan.
@@ -121,5 +121,59 @@ Pulangkan HANYA satu array JSON (tiada teks lain, tiada pagar kod \`\`\`), denga
     "maksud": "Hubungan yang rapat dan saling membantu antara satu sama lain.",
     "contoh": "Ibu bapa dan guru perlulah bagai aur dengan tebing dalam membendung gejala buli siber."
   }
+]`;
+}
+
+// Topic words for searching PRPM by meaning. PRPM searches the official
+// meanings of peribahasa as well as their wording, so a word like "dadah" or
+// "mencegah" finds real sayings ABOUT that theme.
+export function buildPeribahasaThemePrompt(topic: string, facts: string[]): string {
+  const factBlock = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
+  return `Anda membantu mencari peribahasa Melayu untuk karangan SPM.
+
+TAJUK KARANGAN: "${topic}"
+FAKTA:
+${factBlock}
+
+Senaraikan 6 kata dasar Bahasa Melayu (SATU perkataan setiap satu, huruf kecil) yang mungkin terdapat dalam MAKSUD peribahasa yang sesuai untuk karangan ini — tentang isu, punca, kesan atau cara mengatasinya. Contoh untuk tajuk rasuah: "rasuah", "suap", "tamak", "khianat", "amanah", "jujur".
+
+Pulangkan HANYA satu array JSON string (tiada teks lain), contohnya: ["rasuah", "suap", "tamak", "khianat", "amanah", "jujur"]`;
+}
+
+// Final pick for peribahasa: every item is a real PRPM DBP entry with its
+// exact wording and official meaning. The AI picks the ones whose REAL
+// meaning suits the essay — preferring sayings students know — and writes
+// each example sentence with DBP's exact wording.
+export function buildPeribahasaPickPrompt(
+  topic: string,
+  facts: string[],
+  items: { peribahasa: string; maksud: string }[],
+  count: number,
+): string {
+  const factBlock = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
+  const itemBlock = items
+    .map((it, i) => `${i}. "${it.peribahasa}" — Maksud rasmi (DBP): ${it.maksud || "(tiada)"}`)
+    .join("\n");
+
+  return `Anda ialah guru Bahasa Melayu SPM yang memilih peribahasa untuk karangan.
+
+TAJUK KARANGAN: "${topic}"
+FAKTA:
+${factBlock}
+
+SENARAI PERIBAHASA (semuanya sahih — bentuk dan maksud rasmi daripada Pusat Rujukan Persuratan Melayu DBP):
+${itemBlock}
+
+TUGAS:
+1. Pilih SEHINGGA ${count} peribahasa daripada senarai di atas yang MAKSUD RASMINYA benar-benar sesuai digunakan dalam karangan bertajuk ini berdasarkan fakta (contohnya tentang punca, kesan, peranan pihak tertentu atau langkah mengatasi isu). Nilai berdasarkan maksud rasmi, BUKAN tekaan anda.
+2. Utamakan peribahasa yang LAZIM dan dikenali pelajar SPM berbanding yang klasik atau jarang digunakan. Susun daripada yang terbaik.
+3. Jangan pilih yang ragu-ragu atau yang hanya berkaitan secara longgar. Memilih sedikit yang tepat lebih baik daripada banyak yang dipaksa.
+4. Jangan pilih lebih daripada SATU peribahasa yang maksud rasminya sama atau hampir sama — pilih yang paling dikenali sahaja.
+5. Bagi setiap pilihan, tulis "contoh": SATU ayat karangan dalam Bahasa Melayu formal yang menggunakan peribahasa itu dengan bentuk TEPAT seperti dalam senarai, mengikut maksud rasminya, dan dikaitkan dengan salah satu fakta.
+
+FORMAT OUTPUT:
+Pulangkan HANYA satu array JSON (tiada teks lain, tiada pagar kod \`\`\`) bagi peribahasa yang dipilih sahaja, mengikut nombor dalam senarai:
+[
+  { "index": 0, "contoh": "..." }
 ]`;
 }

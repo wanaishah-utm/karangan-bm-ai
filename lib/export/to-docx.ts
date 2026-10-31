@@ -231,15 +231,30 @@ export async function exportToDocx(report: SavedReport): Promise<void> {
       );
       children.push(
         new Paragraph({
-          border: { left: edge, right: edge, bottom: edge },
+          border: item.sumber ? { left: edge, right: edge } : { left: edge, right: edge, bottom: edge },
           indent: { left: INSET, right: INSET },
-          spacing: { after: 40 },
+          spacing: item.sumber ? undefined : { after: 40 },
+          keepNext: Boolean(item.sumber),
           children: [
             new TextRun({ text: "Contoh: ", bold: true, size: 20 }),
             new TextRun({ text: item.contoh, italics: true, size: 20, color: GREY }),
           ],
         }),
       );
+      // Where PRPM DBP lists it, small at the bottom-right like a fact's source.
+      if (item.sumber) {
+        children.push(
+          new Paragraph({
+            border: { left: edge, right: edge, bottom: edge },
+            indent: { left: INSET, right: INSET },
+            alignment: AlignmentType.RIGHT,
+            spacing: { after: 40 },
+            children: [
+              new TextRun({ text: `Sumber: ${item.sumber} (PRPM DBP)`, size: 16, color: GREY }),
+            ],
+          }),
+        );
+      }
     }
   }
 

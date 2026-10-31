@@ -61,6 +61,7 @@ export function buildReportText(report: SavedReport): string {
       lines.push(`${index + 1}. ${item.peribahasa}`);
       lines.push(`   Maksud: ${item.maksud}`);
       lines.push(`   Contoh: ${item.contoh}`);
+      if (item.sumber) lines.push(`   Sumber: ${item.sumber} (PRPM DBP)`);
       lines.push("");
     });
   }

@@ -1,15 +1,16 @@
 "use client";
 
 // "Cadangan Peribahasa": the last block of a report. The teacher asks the AI
-// for peribahasa that suit the report's facts; each comes with its meaning, an
-// example sentence tied to the facts, and a link to check it on PRPM DBP.
-// The suggestions are saved with the report.
+// for peribahasa that suit the report's facts; the server keeps only those
+// PRPM DBP lists (see /api/peribahasa). Each comes with its meaning, an
+// example sentence tied to the facts, the PRPM source it was confirmed in,
+// and a link to look it up on PRPM. The suggestions are saved with the report.
 //
 // A "Sertakan dalam cetakan & muat turun" tick decides whether they appear on
 // paper and in the DOCX / Salin / Kongsi versions (on by default). When it's
 // off, the whole block is `no-print`.
 import { useState } from "react";
-import { ExternalLink, Loader2, Quote, RefreshCw, Sparkles } from "lucide-react";
+import { BadgeCheck, ExternalLink, Loader2, Quote, RefreshCw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import type { SavedReport, SectionKey } from "@/types";
@@ -143,12 +144,22 @@ export function PeribahasaSection({
               <span className="font-semibold text-foreground">Contoh:</span>{" "}
               <span className="italic">{item.contoh}</span>
             </p>
-            <div className="no-print mt-2 flex justify-end">
+            <div className="report-fact-meta mt-2 flex flex-wrap items-center justify-between gap-2">
+              {/* Where PRPM DBP lists it (suggestions saved before the PRPM
+                  check existed have no source). */}
+              {item.sumber ? (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                  <BadgeCheck className="size-3.5" aria-hidden />
+                  {item.sumber}
+                </span>
+              ) : (
+                <span />
+              )}
               <a
                 href={prpmUrl(item.peribahasa)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 rounded-sm text-xs font-medium text-amber-800 underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-300"
+                className="no-print ml-auto inline-flex items-center gap-1 rounded-sm text-xs font-medium text-amber-800 underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-300"
               >
                 Semak di PRPM DBP
                 <ExternalLink className="size-3" aria-hidden />

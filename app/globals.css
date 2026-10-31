@@ -300,6 +300,9 @@
     display: block !important;
     text-align: right;
   }
+  .report-fact-meta svg {
+    display: none !important;
+  }
 
   /* "Cadangan Peribahasa" bar: gold with dark-brown text, kept on paper. */
   .report-peribahasa-head,

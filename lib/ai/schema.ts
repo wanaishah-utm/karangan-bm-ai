@@ -35,6 +35,13 @@ export const peribahasaSchema = z.object({
   contoh: z.string().trim().min(1),
 });
 
+// One pick from the pool of PRPM-checked peribahasa: which item (by its
+// number in the list) and an example sentence using DBP's exact wording.
+export const peribahasaPickSchema = z.object({
+  index: z.number().int().nonnegative(),
+  contoh: z.string().trim().min(1),
+});
+
 // Handy TypeScript types inferred straight from the schemas.
 export type AiFactCard = z.infer<typeof factCardSchema>;
 export type AiSectionCards = z.infer<typeof sectionCardsSchema>;

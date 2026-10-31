@@ -53,6 +53,9 @@ export interface Peribahasa {
   peribahasa: string; // the saying itself, e.g. "Bagai aur dengan tebing"
   maksud: string;     // its standard meaning, in BM
   contoh: string;     // an example sentence using it, tied to the report's facts
+  // Where PRPM DBP lists it, e.g. "Kamus Istimewa Peribahasa Melayu". Absent
+  // on suggestions saved before this check existed.
+  sumber?: string;
 }
 
 // BM display labels for each section — UI reads from here
